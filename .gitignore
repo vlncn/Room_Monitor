@@ -33,6 +33,10 @@ fp-info-cache
 *.xml
 *.csv
 
+# Ignore for a while
+*.xlsx
+*.png
+
 # Archived Backups (KiCad 6.0)
 **/*-backups/*.zip
 
