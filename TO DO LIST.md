@@ -15,8 +15,8 @@ MQTT :
     - How to receive data from ESP 32
 
 Database :
-Learning PostgreSQL in Docker situation (Apperently the data in database is deleted when docker is shutdown)
-Learning to make a backup database when 1 database is down ()
+- Learning PostgreSQL in Docker situation (Apperently the data in database is deleted when docker is shutdown)
+- Learning to make a backup database when 1 database is down ()
 - Learning how to connect between 2 Database
 
 WEB APP :
