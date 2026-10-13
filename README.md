@@ -5,6 +5,5 @@ A simple project to compare the temperature of my room with the temperature of m
 **Status:** 🚧 In progress
 --
 
-TO DO LIST
+[TO DO LIST](https://github.com/vlncn/Room_Monitor/blob/main/TO%20DO%20LIST.md)
 
-[LINK]
