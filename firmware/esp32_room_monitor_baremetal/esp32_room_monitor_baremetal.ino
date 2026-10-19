@@ -1,18 +1,15 @@
 /*
-  ESP32 Room Monitor (standalone / local), bare-metal style
-  BME280 + 0.96" SSD1306 OLED (128x64)
-
-  One loop(), no RTOS tasks. Timing is done with millis().
-  Every SAMPLE_MS: read the sensor, print to Serial, redraw the OLED.
-
-  Libraries: Adafruit BME280 (+ Unified Sensor), Adafruit SSD1306 (+ GFX)
-  Wiring (both devices): VIN->3V3, GND->GND, SDA->GPIO21, SCL->GPIO22
+  A
 */
+#include <WiFi.h>
+#include <PubSubClient.h>
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <stdio.h>
+#include <time.h>
 #include "config.h"
 
 // ---------- CONFIG ----------
@@ -20,26 +17,104 @@ const int      SDA_PIN    = 21;
 const int      SCL_PIN    = 22;
 const uint8_t  BME_ADDR   = 0x76;   // try 0x77 if not found
 const uint8_t  OLED_ADDR  = 0x3C;   // try 0x3D if not found
-const uint32_t SAMPLE_MS  = 1000;
-const int      FAIL_LIMIT = 5;      // consecutive failed reads before showing an error
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 8 * 3600;
+const int   daylightOffset_sec = 0;
 // -----------------------------
 
 #define SCREEN_W 128
 #define SCREEN_H 64
+#define JSON_BUFFER_SIZE 128
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+long lastMsg = 0;
+char msg[128];
+int value = 0;
 
 Adafruit_BME280  bme;
 Adafruit_SSD1306 oled(SCREEN_W, SCREEN_H, &Wire, -1);
 
-float    temp = NAN, hum = NAN, pres = NAN;
-bool     sensorOk = false;
+QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
+struct ReadingResult {
+    float temp = 0;
+    float hum = 0;
+    String time_measure = "";
+};
+bool sensorOk = false;
+ReadingResult latestread; //Creating latest read Struct to display in OLED
+
+String GetTime(){ // Getting Timestamp from NTP Server
+    time_t now = time(nullptr);
+
+    struct tm utcInfo;
+    gmtime_r(&now, &utcInfo);
+
+    char timestamp[25];
+    strftime(
+    timestamp,
+    sizeof(timestamp),
+    "%Y-%m-%dT%H:%M:%SZ",
+    &utcInfo);
+
+    return String(timestamp);
+};
+
+void datatoJSon(struct ReadingResult data){ //struct ReadingResult
+    // Serial.println(timestamp);
+    char localBuffer[JSON_BUFFER_SIZE];
+
+    snprintf(localBuffer, sizeof(localBuffer),
+           "{\"device_id\":\"ESP32_01_ROOM_LEVEL_1\",\"temp\":%.1f,\"hum\":%.2f,\"up\":%s}",
+           data.temp, data.hum, data.time_measure.c_str());
+
+    if (xQueueSend(jsonQueue, &localBuffer, 0) == pdPASS) {
+      // Serial.println("JSON queued successfully.");
+    } else {
+    // TODO : DATA IS SAVED TO LITTLEFS --> BUFFER DATA
+      // Serial.println("Queue full! Data dropped.");
+    }
+
+    return;
+}
 
 void NetworkTask(void *Parameters){
+    /*
+    TODO :
+    Check Connection to Wi-FI
+    Connect to MQTT
+    Handle Error
+    */
+    char txBuffer[JSON_BUFFER_SIZE];
+    while(true){
+        while (!client.connected()) {
+            if (client.connect("ESP32_Task_Client")) { break; }
+            delay(3000);
+            Serial.println("Connecting to MQTT");
+            Serial.printf("MQTT failed, state = %d\n", client.state());
+        }
+        client.loop(); // Keep MQTT alive
+
+        if (xQueueReceive(jsonQueue, &txBuffer, portMAX_DELAY) == pdTRUE) {
+            Serial.print("[Task MQTT] Uploading payload: ");
+            Serial.println(txBuffer);
+
+            if (client.publish("ROOM_LEVEL_1", txBuffer)) {
+                Serial.println("[Task MQTT] Publish Success");
+            } else {
+                Serial.println("[Task MQTT] Publish Failed");
+            }
+            }
+    }
     return;
 }
 
 void DisplayTask(void *Parameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  while (1){
+  while (true){
+    ReadingResult snap;
+    snap = latestread;
+    // Serial.printf("From Display Task, Temp :%.2fC, Hum: %.2f\n", snap.temp, snap.hum);
     oled.clearDisplay();
     oled.setTextColor(SSD1306_WHITE);
 
@@ -51,11 +126,11 @@ void DisplayTask(void *Parameters) {
     if (sensorOk) {
         oled.setTextSize(3);
         oled.setCursor(0, 16);
-        oled.printf("%.1fC", temp);
+        oled.printf("%.1fC", snap.temp);
 
         oled.setTextSize(1);
         oled.setCursor(0, 46);
-        oled.printf("Humidity: %.1f %%", hum);
+        oled.printf("Humidity: %.1f %%", snap.hum);
     } else {
         oled.setTextSize(2);
         oled.setCursor(0, 24);
@@ -63,28 +138,34 @@ void DisplayTask(void *Parameters) {
         oled.setCursor(0, 42);
         oled.print("ERROR");
     }
-        oled.display();
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
+    // ADD ERROR HANDLE ON SENSOR OR MQTT
+    oled.display();
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
   }
 }
 
 void SensorTask(void *Parameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    while(1){
+    while(true){
+        String timestamp = GetTime();
         float t = bme.readTemperature();
         float h = bme.readHumidity();
-        temp = t; hum = h;
+        latestread.temp = t; latestread.hum = h; latestread.time_measure = timestamp;
+        // Serial.printf("From Sensor Task, Temp :%.2fC, Hum: %.2f\n", latestread.temp, latestread.hum);
         sensorOk = true;
-
+        datatoJSon(latestread);
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
 
 void setup() {
+  // ESP32 STARTUP
   Serial.begin(115200);
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(400000);
 
+  // SENSOR STARTUP
+  // BME STARTUP
   if (!bme.begin(BME_ADDR)) {
     Serial.println("BME280 not found. Check wiring and address (0x76 / 0x77).");
     while (true) delay(1000);
@@ -101,26 +182,37 @@ void setup() {
     Serial.println("OLED not found. Check wiring and address (0x3C / 0x3D).");
     while (true) delay(1000);
   }
+
+  // NETWORK STARTUP
+  // Wi-Fi
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  // MQTT
   client.setServer(mqtt_server, 1883);
-
+  
+  
+  // OLED SETUP
   oled.clearDisplay();
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(1);
   oled.setCursor(0, 28);
   oled.print("Starting...");
   oled.display();
-  xTaskCreatePinnedToCore(SensorTask, "sensor",  4096, nullptr, 1, nullptr, 1);
+
+  // RTOS STUFF
+  jsonQueue = xQueueCreate(5, JSON_BUFFER_SIZE);
+  if (jsonQueue == NULL) {
+    Serial.println("Error creating the FreeRTOS Queue");
+    return;
+  }
+  xTaskCreatePinnedToCore(NetworkTask, "network",  4096, nullptr, 2, nullptr, 0);
+  xTaskCreatePinnedToCore(SensorTask, "sensor",  4096, nullptr, 3, nullptr, 1);
   xTaskCreatePinnedToCore(DisplayTask, "display", 4096, nullptr, 1, nullptr, 1);
 }
 

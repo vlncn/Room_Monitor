@@ -1,19 +1,21 @@
 FIRMWARE (without Using AI):
-- Upgrade from baremetal to RTOS
-- Add Wi-FI and MQTT
+- ~~Upgrade from baremetal to RTOS~~
+- ~~Add Wi-FI and MQTT~~
 - Add Queue and Buffer data for every failed attempt to upload data using LittleFS
+- Add buffer data when database is down
+- Structuring how to send old data after the database is back
+- Error Handling
 
 MQTT :
 - Learn MQTT
-    - Structuring Data
-    - How to send data to postgreSQL
-    - Queue data from SQL to website
-    - How to receive data from ESP 32
+    - ~~Structuring Data~~
+    - How to send data to postgreSQL (Next)
+    - Queue data from MQTT to website
+    - How to send data to ESP 32
 
 Database :
-- Learning PostgreSQL in Docker situation (Apperently the data in database is deleted when docker is shutdown)
 - Learning to make a backup database when 1 database is down ()
-- Learning how to connect between 2 Database
+- Learning how to cache between 2 Database
 
 WEB APP :
 - Just use Claude AI to make WEB because I dont like to learn web design
