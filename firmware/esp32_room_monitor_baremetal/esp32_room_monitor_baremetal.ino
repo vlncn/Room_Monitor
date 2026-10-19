@@ -8,12 +8,12 @@
   Libraries: Adafruit BME280 (+ Unified Sensor), Adafruit SSD1306 (+ GFX)
   Wiring (both devices): VIN->3V3, GND->GND, SDA->GPIO21, SCL->GPIO22
 */
-
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "config.h"
 
 // ---------- CONFIG ----------
 const int      SDA_PIN    = 21;
@@ -27,61 +27,57 @@ const int      FAIL_LIMIT = 5;      // consecutive failed reads before showing a
 #define SCREEN_W 128
 #define SCREEN_H 64
 
-SemaphoreHandle_t i2cMutex;
-SemaphoreHandle_t dataMutex;
-
 Adafruit_BME280  bme;
 Adafruit_SSD1306 oled(SCREEN_W, SCREEN_H, &Wire, -1);
 
 float    temp = NAN, hum = NAN, pres = NAN;
 bool     sensorOk = false;
-int      failCount = 0;
-uint32_t lastSample = 0;
 
-void DisplayTask() {
-  oled.clearDisplay();
-  oled.setTextColor(SSD1306_WHITE);
-
-  oled.setTextSize(1);
-  oled.setCursor(0, 0);
-  oled.print("Room Monitor");
-  oled.drawFastHLine(0, 10, SCREEN_W, SSD1306_WHITE);
-
-  if (sensorOk) {
-    oled.setTextSize(3);
-    oled.setCursor(0, 16);
-    oled.printf("%.1fC", temp);
-
-    oled.setTextSize(1);
-    oled.setCursor(0, 46);
-    oled.printf("Humidity: %.1f %%", hum);
-    oled.setCursor(0, 56);
-    oled.printf("Pressure: %.1f hPa", pres);
-  } else {
-    oled.setTextSize(2);
-    oled.setCursor(0, 24);
-    oled.print("SENSOR");
-    oled.setCursor(0, 42);
-    oled.print("ERROR");
-  }
-
-  oled.display();
+void NetworkTask(void *Parameters){
+    return;
 }
 
-void SensorTask() {
-  float t = bme.readTemperature();
-  float h = bme.readHumidity();
+void DisplayTask(void *Parameters) {
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  while (1){
+    oled.clearDisplay();
+    oled.setTextColor(SSD1306_WHITE);
 
-  bool valid = !isnan(t) && !isnan(h);
-  failCount = valid ? 0 : failCount + 1;
+    oled.setTextSize(1);
+    oled.setCursor(0, 0);
+    oled.print("Room Monitor");
+    oled.drawFastHLine(0, 10, SCREEN_W, SSD1306_WHITE);
 
-  if (valid) {
-    temp = t; hum = h; pres = p;
-    sensorOk = true;
-  } else {
-    if (failCount >= FAIL_LIMIT) sensorOk = false;   // sensor considered lost
-    Serial.println("Sensor read failed");
+    if (sensorOk) {
+        oled.setTextSize(3);
+        oled.setCursor(0, 16);
+        oled.printf("%.1fC", temp);
+
+        oled.setTextSize(1);
+        oled.setCursor(0, 46);
+        oled.printf("Humidity: %.1f %%", hum);
+    } else {
+        oled.setTextSize(2);
+        oled.setCursor(0, 24);
+        oled.print("SENSOR");
+        oled.setCursor(0, 42);
+        oled.print("ERROR");
+    }
+        oled.display();
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
   }
+}
+
+void SensorTask(void *Parameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    while(1){
+        float t = bme.readTemperature();
+        float h = bme.readHumidity();
+        temp = t; hum = h;
+        sensorOk = true;
+
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
+    }
 }
 
 void setup() {
@@ -105,27 +101,28 @@ void setup() {
     Serial.println("OLED not found. Check wiring and address (0x3C / 0x3D).");
     while (true) delay(1000);
   }
-  
-  i2cMutex     = xSemaphoreCreateMutex();
-  dataMutex    = xSemaphoreCreateMutex();
-  
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+  client.setServer(mqtt_server, 1883);
+
   oled.clearDisplay();
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(1);
   oled.setCursor(0, 28);
   oled.print("Starting...");
   oled.display();
-  xTaskCreatePinnedToCore(SensorTask, "sensor",  4096, nullptr, 3, nullptr, 1);
-  if (hasOled) {
-    xTaskCreatePinnedToCore(DisplayTask, "display", 4096, nullptr, 1, nullptr, 1);
-  }
+  xTaskCreatePinnedToCore(SensorTask, "sensor",  4096, nullptr, 1, nullptr, 1);
+  xTaskCreatePinnedToCore(DisplayTask, "display", 4096, nullptr, 1, nullptr, 1);
 }
 
 void loop() {
-  if (millis() - lastSample >= SAMPLE_MS) {
-    lastSample += SAMPLE_MS;   // fixed schedule, no drift
-    readSensor();
-    drawScreen();
-  }
-  // Other non-blocking work can go here
 }

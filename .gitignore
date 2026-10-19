@@ -45,3 +45,5 @@ fp-info-cache
 
 # Local project settings
 *.kicad_prl
+
+firmware\esp32_room_monitor_baremetal\config.h
