@@ -4,7 +4,7 @@ FIRMWARE (without Using AI):
 - Add Queue and Buffer data for every failed attempt to upload data using LittleFS
 - Add buffer data when database is down
 - Structuring how to send old data after the database is back
-- Error Handling
+- Error Handling (Sensor Off, ESP Off, and OLED Off)
 
 MQTT :
 - Learn MQTT
