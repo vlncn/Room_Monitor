@@ -10,8 +10,8 @@ FIRMWARE (without Using AI):
 MQTT :
 - Learn MQTT
     - ~~Structuring Data~~
-    - How to send data to postgreSQL (Next)
-    - Queue data from MQTT to website
+    - ~~How to send data to postgreSQL~~
+    - Queue data from MQTT to website (NEXT MAKE WEB APP)
     - How to send data to ESP 32
 
 Database :
@@ -20,7 +20,6 @@ Database :
 
 WEB APP :
 - Just use Claude AI to make WEB because I dont like to learn web design
-- Plan to use Netlify to host the website
 
 
 
