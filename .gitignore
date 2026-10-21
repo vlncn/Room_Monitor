@@ -46,4 +46,5 @@ fp-info-cache
 # Local project settings
 *.kicad_prl
 
+# Sensitive Data
 firmware\esp32_room_monitor\config.h
