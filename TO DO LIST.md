@@ -4,6 +4,7 @@ FIRMWARE (without Using AI):
 - Add Queue and Buffer data for every failed attempt to upload data using LittleFS
 - Add buffer data when database is down
 - Structuring how to send old data after the database is back
+- Make ESP32 Deep Sleep and send data every 20 minutes
 - Error Handling (Sensor Off, ESP Off, and OLED Off)
 
 MQTT :
