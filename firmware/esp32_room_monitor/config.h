@@ -1,5 +1,0 @@
-#pragma once
-
-#define WIFI_SSID "GREEN HOUSE"
-#define WIFI_PASSWORD "Para979IWSM20AU"
-#define MQTT_SERVER "192.168.1.9"
