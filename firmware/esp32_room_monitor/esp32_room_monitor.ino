@@ -1,3 +1,6 @@
+/*
+  A
+*/
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Wire.h>
@@ -7,12 +10,10 @@
 #include <Adafruit_SSD1306.h>
 #include <Preferences.h>
 #include <time.h>
+#include "config.h"
 #include <LittleFS.h>
 
 // ---------- CONFIG ----------
-const char* ssid        = "xxx";
-const char* password    = "xxx";
-const char* mqtt_server = "xxx";
 const int      SDA_PIN    = 21;
 const int      SCL_PIN    = 22;
 const uint8_t  BME_ADDR   = 0x76;   // try 0x77 if not found
@@ -33,7 +34,7 @@ PubSubClient client(espClient);
 
 Adafruit_BME280  bme;
 Adafruit_SSD1306 oled(SCREEN_W, SCREEN_H, &Wire, -1);
-Preferences preferences;
+//Preferences preferences;
 
 QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
 struct ReadingResult {
@@ -213,7 +214,7 @@ void setup() {
 
   // NETWORK STARTUP
   // Wi-Fi
-  WiFi.begin(ssid, password);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -222,7 +223,7 @@ void setup() {
   Serial.println(WiFi.localIP());
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
-  client.setServer(mqtt_server, 1883);
+  client.setServer(MQTT_SERVER, 1883);
   
   
   // OLED SETUP
