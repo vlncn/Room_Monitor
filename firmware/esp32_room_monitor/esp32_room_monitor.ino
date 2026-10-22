@@ -1,6 +1,3 @@
-/*
-  A
-*/
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Wire.h>
@@ -8,11 +5,14 @@
 #include <Adafruit_BME280.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <stdio.h>
+#include <Preferences.h>
 #include <time.h>
-#include "config.h"
+#include <LittleFS.h>
 
 // ---------- CONFIG ----------
+const char* ssid        = "xxx";
+const char* password    = "xxx";
+const char* mqtt_server = "xxx";
 const int      SDA_PIN    = 21;
 const int      SCL_PIN    = 22;
 const uint8_t  BME_ADDR   = 0x76;   // try 0x77 if not found
@@ -20,6 +20,8 @@ const uint8_t  OLED_ADDR  = 0x3C;   // try 0x3D if not found
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 8 * 3600;
 const int   daylightOffset_sec = 0;
+const char* LOG_FILE       = "/records.csv";
+const char* CURSOR_FILE    = "/cursor.dat";
 // -----------------------------
 
 #define SCREEN_W 128
@@ -28,12 +30,10 @@ const int   daylightOffset_sec = 0;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-long lastMsg = 0;
-char msg[128];
-int value = 0;
 
 Adafruit_BME280  bme;
 Adafruit_SSD1306 oled(SCREEN_W, SCREEN_H, &Wire, -1);
+Preferences preferences;
 
 QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
 struct ReadingResult {
@@ -41,8 +41,10 @@ struct ReadingResult {
     float hum = 0;
     String time_measure = "";
 };
+
 bool sensorOk = false;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
+uint32_t sequenceNumber = 0;
 
 String GetTime(){ // Getting Timestamp from NTP Server
     time_t now = time(nullptr);
@@ -60,24 +62,46 @@ String GetTime(){ // Getting Timestamp from NTP Server
     return String(timestamp);
 };
 
-void datatoJSon(struct ReadingResult data){ //struct ReadingResult
-    // Serial.println(timestamp);
-    char localBuffer[JSON_BUFFER_SIZE];
+void initSequenceNumber() {
+    preferences.begin("room-monitor", false);
 
-    snprintf(localBuffer, sizeof(localBuffer),
-           "{\"device_id\":\"ESP32_01_ROOM_LEVEL_1\",\"temp\":%.1f,\"hum\":%.2f,\"up\":%s}",
-           data.temp, data.hum, data.time_measure.c_str());
+    // Read the last saved sequence; use 0 if it doesn't exist.
+    sequenceNumber = preferences.getUInt("sequence", 0);
+}
 
-    if (xQueueSend(jsonQueue, &localBuffer, 0) == pdPASS) {
-      // Serial.println("JSON queued successfully.");
-    } else {
-    // TODO : DATA IS SAVED TO LITTLEFS --> BUFFER DATA
-      // Serial.println("Queue full! Data dropped.");
-    }
+uint32_t getNextSequenceNumber() {
+    sequenceNumber++;
 
+    // Persist the new value in flash.
+    preferences.putUInt("sequence", sequenceNumber);
+
+    return sequenceNumber;
+}
+
+void SavetoLittleFS(struct ReadingResult data){
+    File file = LittleFS.open(LOG_FILE, FILE_APPEND);
+    if (!file) return;
+
+    size_t written = file.printf("%d,%.2f,%.2f,%s\n", 
+        sequenceNumber, data.temp, data.hum, data.time_measure.c_str());
+    file.flush();
+    file.close();
     return;
 }
 
+void datatoJSon(struct ReadingResult data){ //struct ReadingResult
+    uint32_t seq = sequenceNumber++;
+    char localBuffer[JSON_BUFFER_SIZE];
+
+    snprintf(localBuffer, sizeof(localBuffer),
+           "{\"message_id\":%d,\"device_id\":\"ESP32_01_ROOM_LEVEL_1\",\"temp\":%.2f,\"hum\":%.2f,\"measure_at\":\"%s\"}",
+           seq, data.temp, data.hum, data.time_measure.c_str());
+
+    if (xQueueSend(jsonQueue, &localBuffer, 0) != pdPASS) SavetoLittleFS(data);
+    return;
+}
+
+/*                             TASK                       */
 void NetworkTask(void *Parameters){
     /*
     TODO :
@@ -85,9 +109,10 @@ void NetworkTask(void *Parameters){
     Connect to MQTT
     Handle Error
     */
+    TickType_t xLastWakeTime = xTaskGetTickCount();
     char txBuffer[JSON_BUFFER_SIZE];
     while(true){
-        while (!client.connected()) {
+        while (!client.connected()) { // Stuck on Connecting to MQTT should give a way to make room for unsend data
             if (client.connect("ESP32_Task_Client")) { break; }
             delay(3000);
             Serial.println("Connecting to MQTT");
@@ -103,10 +128,9 @@ void NetworkTask(void *Parameters){
                 Serial.println("[Task MQTT] Publish Success");
             } else {
                 Serial.println("[Task MQTT] Publish Failed");
-            }
+                }
             }
     }
-    return;
 }
 
 void DisplayTask(void *Parameters) {
@@ -154,7 +178,7 @@ void SensorTask(void *Parameters) {
         // Serial.printf("From Sensor Task, Temp :%.2fC, Hum: %.2f\n", latestread.temp, latestread.hum);
         sensorOk = true;
         datatoJSon(latestread);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(5000));
     }
 }
 
@@ -163,6 +187,10 @@ void setup() {
   Serial.begin(115200);
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(400000);
+  //initSequenceNumber();
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+    }
 
   // SENSOR STARTUP
   // BME STARTUP
@@ -211,10 +239,11 @@ void setup() {
     Serial.println("Error creating the FreeRTOS Queue");
     return;
   }
-  xTaskCreatePinnedToCore(NetworkTask, "network",  4096, nullptr, 2, nullptr, 0);
+  //xTaskCreatePinnedToCore(NetworkTask, "network",  4096, nullptr, 2, nullptr, 0);
   xTaskCreatePinnedToCore(SensorTask, "sensor",  4096, nullptr, 3, nullptr, 1);
   xTaskCreatePinnedToCore(DisplayTask, "display", 4096, nullptr, 1, nullptr, 1);
 }
 
 void loop() {
+  vTaskDelete(nullptr);   // all work runs in tasks
 }
