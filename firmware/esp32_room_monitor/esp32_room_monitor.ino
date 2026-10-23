@@ -44,6 +44,7 @@ struct ReadingResult {
 };
 
 bool sensorOk = false;
+bool connectedtoMQTT = false;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
 uint32_t sequenceNumber = 0;
 
@@ -63,6 +64,13 @@ String GetTime(){ // Getting Timestamp from NTP Server
     return String(timestamp);
 };
 
+bool CheckConnection() {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    if (!client.connected())  return false;
+    client.loop();
+    return true;
+}
+
 void initSequenceNumber() {
     preferences.begin("room-monitor", false);
 
@@ -79,14 +87,18 @@ uint32_t getNextSequenceNumber() {
     return sequenceNumber;
 }
 
-void SavetoLittleFS(struct ReadingResult data){
+void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){
     File file = LittleFS.open(LOG_FILE, FILE_APPEND);
     if (!file) return;
 
-    size_t written = file.printf("%d,%.2f,%.2f,%s\n", 
-        sequenceNumber, data.temp, data.hum, data.time_measure.c_str());
-    file.flush();
+    size_t written = file.print(JSON);
+    //file.flush();
     file.close();
+    return;
+}
+
+void ReadFromLittleFS(){
+
     return;
 }
 
@@ -98,7 +110,7 @@ void datatoJSon(struct ReadingResult data){ //struct ReadingResult
            "{\"message_id\":%d,\"device_id\":\"ESP32_01_ROOM_LEVEL_1\",\"temp\":%.2f,\"hum\":%.2f,\"measure_at\":\"%s\"}",
            seq, data.temp, data.hum, data.time_measure.c_str());
 
-    if (xQueueSend(jsonQueue, &localBuffer, 0) != pdPASS) SavetoLittleFS(data);
+   if (xQueueSend(jsonQueue, &localBuffer, 0) != pdPASS || !connectedtoMQTT) SavetoLittleFS(localBuffer);
     return;
 }
 
@@ -106,20 +118,19 @@ void datatoJSon(struct ReadingResult data){ //struct ReadingResult
 void NetworkTask(void *Parameters){
     /*
     TODO :
-    Check Connection to Wi-FI
-    Connect to MQTT
+    Disconnect from Wi-FI and MQTT after doing the task
     Handle Error
     */
     TickType_t xLastWakeTime = xTaskGetTickCount();
     char txBuffer[JSON_BUFFER_SIZE];
     while(true){
-        while (!client.connected()) { // Stuck on Connecting to MQTT should give a way to make room for unsend data
-            if (client.connect("ESP32_Task_Client")) { break; }
-            delay(3000);
-            Serial.println("Connecting to MQTT");
-            Serial.printf("MQTT failed, state = %d\n", client.state());
+        for (size_t i = 0; i < 3; i++)
+        {
+            if (WiFi.status() != WL_CONNECTED || !client.connected()) connectedtoMQTT = CheckConnection();
+            else break;
+            vTaskDelay(1000);
         }
-        client.loop(); // Keep MQTT alive
+        if (!connectedtoMQTT) continue; // Just Sleep
 
         if (xQueueReceive(jsonQueue, &txBuffer, portMAX_DELAY) == pdTRUE) {
             Serial.print("[Task MQTT] Uploading payload: ");
@@ -128,6 +139,7 @@ void NetworkTask(void *Parameters){
             if (client.publish("ROOM_LEVEL_1", txBuffer)) {
                 Serial.println("[Task MQTT] Publish Success");
             } else {
+                // SavetoLittleFS(txBuffer);
                 Serial.println("[Task MQTT] Publish Failed");
                 }
             }
@@ -188,17 +200,13 @@ void setup() {
   Serial.begin(115200);
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(400000);
+  bme.begin(BME_ADDR);
+  oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+  LittleFS.begin();
   //initSequenceNumber();
-  if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS mount failed");
-    }
 
   // SENSOR STARTUP
-  // BME STARTUP
-  if (!bme.begin(BME_ADDR)) {
-    Serial.println("BME280 not found. Check wiring and address (0x76 / 0x77).");
-    while (true) delay(1000);
-  }
+  
   // 1x oversampling, 1 s standby: low self-heating for room measurements
   bme.setSampling(Adafruit_BME280::MODE_NORMAL,
                   Adafruit_BME280::SAMPLING_X1,
@@ -207,20 +215,10 @@ void setup() {
                   Adafruit_BME280::FILTER_OFF,
                   Adafruit_BME280::STANDBY_MS_1000);
 
-  if (!oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-    Serial.println("OLED not found. Check wiring and address (0x3C / 0x3D).");
-    while (true) delay(1000);
-  }
 
   // NETWORK STARTUP
   // Wi-Fi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println(WiFi.localIP());
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
   client.setServer(MQTT_SERVER, 1883);
@@ -235,7 +233,7 @@ void setup() {
   oled.display();
 
   // RTOS STUFF
-  jsonQueue = xQueueCreate(5, JSON_BUFFER_SIZE);
+  jsonQueue = xQueueCreate(3, JSON_BUFFER_SIZE);
   if (jsonQueue == NULL) {
     Serial.println("Error creating the FreeRTOS Queue");
     return;
