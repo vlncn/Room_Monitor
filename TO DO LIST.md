@@ -1,11 +1,14 @@
 FIRMWARE (without Using AI):
 - ~~Upgrade from baremetal to RTOS~~
 - ~~Add Wi-FI and MQTT~~
-- Add Queue and Buffer data for every failed attempt to upload data using LittleFS
-- Add buffer data when database is down
-- Structuring how to send old data after the database is back
-- Make ESP32 Deep Sleep and send data every 20 minutes
+~~- Add Queue and Buffer data for every failed attempt to upload data using LittleFS~~
+~~- Add buffer data when database is down~~
+~~- Structuring how to send old data after the database is back~~
+  ~~- Using semaphore to tell sensor to take measurement~~ (Using Forced measurement from BME library)
+~~  - then send the data to MQTT broker~~
+- Fixing uploading sending old data (bugs)
 - Error Handling (Sensor Off, ESP Off, and OLED Off)
+~~- Data Loss Handling (MQTT OFF, DB OFF, Wi-Fi OFF)~~
 
 MQTT :
 - Learn MQTT
@@ -13,10 +16,6 @@ MQTT :
     - ~~How to send data to postgreSQL~~
     - Queue data from MQTT to website (NEXT MAKE WEB APP)
     - How to send data to ESP 32
-
-Database :
-- Learning to make a backup database when 1 database is down ()
-- Learning how to cache between 2 Database
 
 WEB APP :
 - Just use Claude AI to make WEB because I dont like to learn web design
