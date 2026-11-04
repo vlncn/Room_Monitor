@@ -56,7 +56,6 @@ struct ReadingResult {
 bool sensorOk = false;
 bool connectedtoMQTT = false;
 size_t retryCount = 0;
-long current_millis = millis();
 ReadingResult latestread; //Creating latest read Struct to display in OLED
 uint32_t sequenceNumber = 0;
 
@@ -83,8 +82,9 @@ void WaitForTimeSync(uint32_t timeoutMs) {
 }
 
 bool CheckConnection() {
-    if (WiFi.status() != WL_CONNECTED) return false;
-    if (!client.connected())  return false;
+    Serial.println("Check Connection");
+    if (WiFi.status() != WL_CONNECTED) {WiFi.reconnect(); return false;}
+    if (!client.connected())  {client.connect("ESP32_01_ROOM_LEVEL_1");return false;}
     return true;
 }
 
@@ -107,10 +107,10 @@ void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){
     if (connectedtoMQTT) xTaskNotifyGive(oldDataTaskHandle);
     return;
 }
-
 void ReadFromLittleFS(){
     File file = LittleFS.open(LOG_FILE, FILE_READ);
     File out = LittleFS.open(TEMP_FILE, FILE_WRITE);
+    bool failed = false;
     if (!file) return;
     if (!out) { file.close(); return; }
     if (!file.available()) return;
@@ -128,11 +128,15 @@ void ReadFromLittleFS(){
         // Skip empty lines
         if (len == 0) continue;
 
-        if (!client.publish("ROOM_LEVEL_1/backlog", jsonBuffer)) out.println(jsonBuffer);
+        if (!client.publish("ROOM_LEVEL_1/backlog/data", jsonBuffer)){out.println(jsonBuffer);failed = true;}
         vTaskDelay(pdMS_TO_TICKS(15)); // Change this to make sure the data in SQL is saved then resume upload old data
 
     }
     file.close();
+    out.close();
+    LittleFS.remove(LOG_FILE);
+    if (failed) LittleFS.rename(TEMP_FILE, LOG_FILE);
+    else        LittleFS.remove(TEMP_FILE);
 
     return;
 }
@@ -153,9 +157,9 @@ void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and q
 /*                             TASK                       */
 void SchedulerTask(void *Parameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    xTaskNotifyGive(networkTaskHandle);
     while (true) {
         xTaskNotifyGive(sensorTaskHandle);   // first measurement happens immediately at boot
+        xTaskNotifyGive(networkTaskHandle);
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(MEASURE_INTERVAL_MS));
     }
 }
@@ -164,9 +168,11 @@ void UpOldDataTask(void *Paramaters){
     char txBuffer[JSON_BUFFER_SIZE];
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (retryCount < 3 && !connectedtoMQTT) { 
-            if (WiFi.status() != WL_CONNECTED || !client.connected()) connectedtoMQTT = CheckConnection();
+        while (retryCount < 3 && !connectedtoMQTT) { 
+            connectedtoMQTT = CheckConnection();
             retryCount++;
+            if (connectedtoMQTT) break;
+            vTaskDelay(pdMS_TO_TICKS(5000));
         }
         client.loop();
         if (uxQueueSpacesAvailable(jsonQueueBacklog) != 0) ReadFromLittleFS();
@@ -181,14 +187,16 @@ void NetworkTask(void *Parameters){
     char txBuffer[JSON_BUFFER_SIZE];
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (retryCount < 3 && !connectedtoMQTT) { // Need to check if bugs exist like cannot reset the if statement from another if statement
-            if (WiFi.status() != WL_CONNECTED || !client.connected()) connectedtoMQTT = CheckConnection();
+        while (retryCount < 3 && !connectedtoMQTT) { // Need to check if bugs exist like cannot reset the if statement from another if statement
+            if (connectedtoMQTT = CheckConnection()) break;
             retryCount++;
+            Serial.print(retryCount);
+            vTaskDelay(pdMS_TO_TICKS(5000));
         }
         client.loop();
 
         if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(5000)) == pdTRUE && connectedtoMQTT) {
-            if (client.publish("ROOM_LEVEL_1", txBuffer)) {
+            if (client.publish("ROOM_LEVEL_1/now/data", txBuffer)) {
                 retryCount = 0;
             } else {
                 SavetoLittleFS(txBuffer);
@@ -198,7 +206,7 @@ void NetworkTask(void *Parameters){
             SavetoLittleFS(txBuffer); 
             retryCount = 0;
         }
-
+        if (!LittleFS.exists(LOG_FILE)) xTaskNotifyGive(oldDataTaskHandle);
     }
 }
 
@@ -239,7 +247,7 @@ void DisplayTask(void *Parameters) {
 void SensorTask(void *Parameters) {
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        WaitForTimeSync(15000);
+        while(!WaitForTimeSync(15000)){vTaskDelay(pdMS_TO_TICKS(0));}
         bool ok = bme.takeForcedMeasurement();
         float t = bme.readTemperature();
         float h = bme.readHumidity();
@@ -283,7 +291,7 @@ void setup() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
   client.setServer(mqtt_server, 1883);
-  
+  client.connect("ESP32_01_ROOM_LEVEL_1");
   
   // OLED SETUP
   oled.clearDisplay();
