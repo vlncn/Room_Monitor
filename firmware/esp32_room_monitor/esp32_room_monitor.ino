@@ -88,6 +88,15 @@ bool CheckConnection() {
     return true;
 }
 
+void RetryConnection(){
+    while (retryCount < 3 && !connectedtoMQTT) {
+        if (connectedtoMQTT = CheckConnection()) break;
+        retryCount++;
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
+
 void initSequenceNumber() {
     preferences.begin("room-monitor", false);
     sequenceNumber = preferences.getUInt("sequence", 0);
@@ -99,21 +108,21 @@ uint32_t getNextSequenceNumber() {
     return sequenceNumber;
 }
 
-void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){
-    File file = LittleFS.open(LOG_FILE, FILE_APPEND);
+void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){  // Saving data in JSON format to littleFS to be used to upload old data
+    File file = LittleFS.open(LOG_FILE, FILE_APPEND); // Mutex Log File
     if (!file) return;
     file.println(JSON);
     file.close();
     return;
 }
 
-void ReadFromLittleFS(){
+void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while also save any failed upload 
     File file = LittleFS.open(LOG_FILE, FILE_READ);
-    File out = LittleFS.open(TEMP_FILE, FILE_WRITE);
-    bool failed = false;
     if (!file) return;
-    if (!out) { file.close(); return; }
     if (!file.available()) return;
+    File out = LittleFS.open(TEMP_FILE, FILE_WRITE);
+    if (!out) { file.close(); return; }
+    bool failed = false;
 
     char jsonBuffer[JSON_BUFFER_SIZE];
     while(file.available()){
@@ -127,12 +136,9 @@ void ReadFromLittleFS(){
 
         // Skip empty lines
         if (len == 0) continue;
-        // Serial.print("Data being sent is : ");
-        // Serial.println(jsonBuffer);
 
         if (!client.publish("ROOM_LEVEL_1/backlog/data", jsonBuffer)){out.println(jsonBuffer); failed = true ;connectedtoMQTT = false;}
         vTaskDelay(pdMS_TO_TICKS(15)); // Change this to make sure the data in SQL is saved then resume upload old data
-
     }
     file.close();
     out.close();
@@ -152,9 +158,19 @@ void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and q
            "{\"message_id\":%lu,\"device_id\":\"ESP32_01_ROOM_LEVEL_1\",\"temp\":%.2f,\"hum\":%.2f,\"measure_at\":\"%s\"}",
            seq, data.temp, data.hum, data.time_measure);
 
-    if (xQueueSend(jsonQueue, &localBuffer, 0) != pdPASS) SavetoLittleFS(localBuffer); // Data yang ada di queue bakal kemakan/hilang kalau esp32 kereset (kososngkan queue kalo inet mati)
+    if(connectedtoMQTT) bypasstobuffer = false;
+    if(bypasstobuffer){SavetoLittleFS(localBuffer); return;}
+    if(xQueueSend(jsonQueue, &localBuffer, 0) != pdPASS) {
+        SavetoLittleFS(localBuffer);
+        while(uxQueueMessagesWaiting(jsonQueue) != 0){
+            xQueueReceive(jsonQueue, &localBuffer, 0);
+            SavetoLittleFS(localBuffer);
+        }
+        bypasstobuffer = true;
+    }
     return;
 }
+
 
 /*                             TASK                       */
 void SchedulerTask(void *Parameters) {
@@ -171,20 +187,12 @@ void UpOldDataTask(void *Paramaters){
     char txBuffer[JSON_BUFFER_SIZE];
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        while (retryCount < 3 && !connectedtoMQTT) { 
-            connectedtoMQTT = CheckConnection();
-            retryCount++;
-            if (connectedtoMQTT) break;
-            vTaskDelay(pdMS_TO_TICKS(5000));
-        }
+        RetryConnection();
         if (connectedtoMQTT){
             client.loop();
             ReadFromLittleFS();
             retryCount = 0;
         }
-        // while (uxQueueSpacesAvailable(jsonQueueBacklog) != 0){ // Currently Has no confirmation from database side if the data is already being stored or not
-        //     if (xQueueReceive(jsonQueueBacklog, &txBuffer, 0) == pdTRUE && connectedtoMQTT) client.publish("ROOM_LEVEL_1/backlog/data", txBuffer);
-        // }
     }
 }
 
@@ -192,11 +200,7 @@ void NetworkTask(void *Parameters){
     char txBuffer[JSON_BUFFER_SIZE];
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        while (retryCount < 3 && !connectedtoMQTT) {
-            if (connectedtoMQTT = CheckConnection()) break;
-            retryCount++;
-            vTaskDelay(pdMS_TO_TICKS(5000));
-        }
+        RetryConnection();
         client.loop();
         if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE) {
             if (client.publish("ROOM_LEVEL_1/now/data", txBuffer) && connectedtoMQTT) {
