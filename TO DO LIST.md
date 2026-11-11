@@ -2,9 +2,18 @@
 To be Added :
 - Wi-Fi Manager (Medium Priority)
 - Deep Sleep and power management (Low Priority)
-- Docker (TIG Stack) (Highest Priority)
-- OTA Firmware Update (High Priority)
-- Reliable Data Delivery (High Priority)
+~~- Docker (TIG Stack) (Highest Priority)~~
+- OTA Firmware Update (High Priority 1)
+- Reliable Data Delivery (High Priority 2)
+  - Telegraf Check
+  - Influxdb Check
+  - ESP32 Check
+    - Sensor Error Code 
+  ~~- MQTT Check~~
+- Error handling
+- Edge Cases
+  - Adding Mutex to protect I2C Buses and LittleFS(Storage)
+- Readme
 
 OLD 
 FIRMWARE :
