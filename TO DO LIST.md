@@ -1,10 +1,10 @@
 - Make it Product Grade
 To be Added :
-- Wi-Fi Manager
-- Deep Sleep and power management
-- Docker (TIG Stack)
-- OTA Firmware Update
-- Reliable Data Delivery
+- Wi-Fi Manager (Medium Priority)
+- Deep Sleep and power management (Low Priority)
+- Docker (TIG Stack) (Highest Priority)
+- OTA Firmware Update (High Priority)
+- Reliable Data Delivery (High Priority)
 
 OLD 
 FIRMWARE :

@@ -1,4 +1,13 @@
 services:
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:2
+    ports: ["1883:1883"]
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - mosquitto-data:/mosquitto/data
+    restart: unless-stopped
+
   influxdb3-core:
     container_name: influxdb3-core
     image: influxdb:3-core
@@ -14,7 +23,7 @@ services:
       - influxdb_data:/var/lib/influxdb3
     healthcheck:
       test: ["CMD-SHELL", "curl -f -H 'Authorization: Bearer ${INFLUXDB_TOKEN}' http://localhost:8181/health || exit 1"]
-      interval: 30s
+      interval: 1d
       timeout: 10s
       retries: 3
     restart: unless-stopped
@@ -22,10 +31,7 @@ services:
   telegraf:
     container_name: telegraf
     image: telegraf
-    depends_on:
-      influxdb3-core:
-        condition: service_healthy
-    # Optionally, you can switch to depend on influxdb3-enterprise if using that
+    depends_on: [influxdb3-core:condition: service_healthy, mosquitto]
     environment:
       - INFLUXDB_HOST=${INFLUXDB_HOST}
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
@@ -37,10 +43,10 @@ services:
       - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf
     restart: unless-stopped
 
+
   grafana:
-    image: grafana/grafana
-    ports:
-      - "${GRAFANA_PORT}:3000"
+    image: grafana/grafana-oss
+    ports: ["3000:3000"]
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
@@ -52,5 +58,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  influxdb_data:
-  grafana_data:
+  mosquitto-data:
+  influxdb-data:
+  grafana-data:
