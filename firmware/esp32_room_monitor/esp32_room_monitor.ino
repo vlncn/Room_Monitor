@@ -23,7 +23,7 @@ const long  gmtOffset_sec = 8 * 3600;
 const int   daylightOffset_sec = 0;
 const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
-constexpr uint32_t MEASURE_INTERVAL_MS = 10UL * 60UL * 1000UL; // 10 minutes
+constexpr uint32_t MEASURE_INTERVAL_MS = 1UL * 10UL * 1000UL; // 10 minutes
 // -----------------------------
 
 #define SCREEN_W 128
@@ -40,6 +40,8 @@ Preferences preferences;
 QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
 QueueHandle_t jsonQueueBacklog; // To upload old data that doesn't get sent
 
+
+
 // Task handles (needed for task notifications)
 TaskHandle_t schedulerTaskHandle = nullptr;
 TaskHandle_t sensorTaskHandle    = nullptr;
@@ -55,6 +57,7 @@ struct ReadingResult {
 
 bool sensorOk = false;
 bool connectedtoMQTT = false;
+bool bypasstobuffer = false;
 size_t retryCount = 0;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
 uint32_t sequenceNumber = 0;
@@ -71,18 +74,17 @@ void GetTime(char *out, size_t len){ // Getting Timestamp from NTP Server
     return;
 };
 
-void WaitForTimeSync(uint32_t timeoutMs) {
+bool WaitForTimeSync(uint32_t timeoutMs) { // Function to wait for time sync from NTP Server
     // time() returns ~0 (1970) until NTP has synced
     uint32_t start = millis();
     while (time(nullptr) < 1700000000) {
-        if (millis() - start > timeoutMs) return;
+        if (millis() - start > timeoutMs) return false;
         vTaskDelay(pdMS_TO_TICKS(250));
     }
-    return;
+    return true;
 }
 
-bool CheckConnection() {
-    Serial.println("Check Connection");
+bool CheckConnection() { // Check if ESP is connected to Wi-Fi or MQTT Broker
     if (WiFi.status() != WL_CONNECTED) {WiFi.reconnect(); return false;}
     if (!client.connected())  {client.connect("ESP32_01_ROOM_LEVEL_1");return false;}
     return true;
@@ -95,7 +97,6 @@ void RetryConnection(){
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
-
 
 void initSequenceNumber() {
     preferences.begin("room-monitor", false);
@@ -171,7 +172,6 @@ void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and q
     return;
 }
 
-
 /*                             TASK                       */
 void SchedulerTask(void *Parameters) {
     while(!WaitForTimeSync(15000)){}
@@ -223,7 +223,6 @@ void DisplayTask(void *Parameters) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     ReadingResult snap;
     snap = latestread;
-    // Serial.printf("From Display Task, Temp :%.2fC, Hum: %.2f\n", snap.temp, snap.hum);
     oled.clearDisplay();
     oled.setTextColor(SSD1306_WHITE);
 
@@ -263,7 +262,6 @@ void SensorTask(void *Parameters) {
             latestread.temp = t; latestread.hum = h;
             GetTime(latestread.time_measure, sizeof(latestread.time_measure));
             datatoJSon(latestread);
-        // Serial.printf("From Sensor Task, Temp :%.2fC, Hum: %.2f\n", latestread.temp, latestread.hum);
         } else {
             sensorOk = false;
         }
