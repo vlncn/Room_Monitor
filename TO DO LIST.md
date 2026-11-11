@@ -1,3 +1,20 @@
+- Make it Product Grade
+To be Added :
+- Wi-Fi Manager
+- Deep Sleep and power management
+- Docker (TIG Stack)
+- OTA Firmware Update
+- Reliable Data Delivery
+
+OLD 
+FIRMWARE :
+- Learning Wi-FI Manager
+- Connecting to MQTT
+- Queue Old Data
+- Responding to Switch from Power Mode to Battery Mode
+- Turning off Sending data to MQTT when in Battery Mode
+- Learning the behaviour when wifi is down/ cant connect to MQTT
+
 FIRMWARE (without Using AI):
 - ~~Upgrade from baremetal to RTOS~~
 - ~~Add Wi-FI and MQTT~~
@@ -16,20 +33,3 @@ MQTT :
     - ~~How to send data to postgreSQL~~
     - Queue data from MQTT to website (NEXT MAKE WEB APP)
     - How to send data to ESP 32
-
-WEB APP :
-- Just use Claude AI to make WEB because I dont like to learn web design
-
-
-
-
-
-
-OLD 
-FIRMWARE :
-- Learning Wi-FI Manager
-- Connecting to MQTT
-- Queue Old Data
-- Responding to Switch from Power Mode to Battery Mode
-- Turning off Sending data to MQTT when in Battery Mode
-- Learning the behaviour when wifi is down/ cant connect to MQTT
