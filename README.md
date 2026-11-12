@@ -1,8 +1,8 @@
 # Room Monitor
 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Status](https://img.shields.io/badge/status-MVP%20running-brightgreen) ![Platform](https://img.shields.io/badge/platform-ESP32-blue)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Status](https://img.shields.io/badge/status-Prototype-brightgreen) ![Platform](https://img.shields.io/badge/platform-ESP32-blue)
 
-An ESP32 + BME280 node that logs room temperature and humidity, compares them with the outdoor conditions in my city (Samarinda), and charts both in Grafana.
+An ESP32 + BME280 node that logs room temperature and humidity, compares them with the outdoor conditions in my city, and charts both in Grafana.
 
 **Hypothesis:** my room is cooler than outside on hot days and warmer on cool days.
 
@@ -35,7 +35,7 @@ flowchart LR
   NT -->|"ROOM_LEVEL_1/now/data"| MQ["Mosquitto"]
   UT -->|"ROOM_LEVEL_1/backlog/data"| MQ
   MQ --> TG["Telegraf"]
-  OM["Open-Meteo"] -->|"poll 1 min"| TG
+  OM["Open-Meteo"] -->|"poll 15 min"| TG
   TG --> DB[("InfluxDB 3 Core")]
   DB --> GF["Grafana"]
 ```
@@ -69,7 +69,7 @@ Arduino-framework sketch (`firmware/esp32_room_monitor.ino`) running FreeRTOS ta
 
 ## Roadmap
  
-The MVP is shipped. The remaining work takes it from a working prototype to a product-grade device, roughly in priority order. tracking task is in [TO DO LIST.md](TO%20DO%20LIST.md).
+The MVP is shipped. The remaining work takes it from a working prototype to a product-grade device, roughly in priority order. Task tracking is in [TO DO LIST.md](TO%20DO%20LIST.md).
  
 **Done (MVP)**
  
@@ -101,9 +101,14 @@ git clone https://github.com/vlncn/Room_Monitor.git
 cd Room_Monitor
 ```
 
-**Backend:** `docker compose up -d` starts Mosquitto, Telegraf, InfluxDB 3 Core and Grafana. Configure them in a `.env` file (not committed): `INFLUXDB_*` (node ID, host, token, org, bucket), `TELEGRAF_*` (interval, topics, latitude/longitude) and `GRAFANA_*` (admin login). InfluxDB 3 Core has auth enabled, so create an admin token first (`influxdb3 create token --admin`).
+**Backend** 
+1. Configure the `.env` file. Fill the missing value.
+2. `docker compose up -d`  
 
-**Grafana:** add an InfluxDB data source in **SQL** mode (URL `http://<influxdb-host>:8181`, database = your bucket), then import `grafana/suhu-dashboard.json`.
+
+**Grafana:** 
+1. Add an InfluxDB data source in **SQL** mode (URL `http://<influxdb-host>:8181`, database = your bucket) 
+2. Add dashboard by importing `grafana/suhu-dashboard.json`.
 
 **Firmware:**
 1. In the Arduino IDE, install the ESP32 board package and the libraries PubSubClient, Adafruit BME280, Adafruit Unified Sensor, Adafruit GFX and Adafruit SSD1306.
@@ -127,4 +132,4 @@ docker-compose.yml   Mosquitto + Telegraf + InfluxDB 3 Core + Grafana
 
 ## License
 
-MIT, see [LICENSE](.\LICENSE).
+MIT, see [LICENSE](LICENSE).

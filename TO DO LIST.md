@@ -1,7 +1,9 @@
-- Make it Product Grade
+## Make it Product Grade
+
 To be Added :
 - Wi-Fi Manager (Medium Priority)
 - Deep Sleep and power management (Low Priority)
+
 ~~- Docker (TIG Stack) (Highest Priority)~~
 - OTA Firmware Update (High Priority 1)
 - Reliable Data Delivery (High Priority 2)
@@ -13,7 +15,7 @@ To be Added :
 - Error handling
 - Edge Cases
   - Adding Mutex to protect I2C Buses and LittleFS(Storage)
-- Readme
+~~- Readme~~
 
 List of Known bugs :
 - Uploading data is being sent from LittleFS (No Handshake during delivery process)
@@ -21,7 +23,8 @@ List of Known bugs :
 - No handling on sensor error. if sensor is not connected there's no error code to help with diagnostic
 - There's no device or service status or last will so everything is spagethi and hope everything is working normally
 
-OLD 
+## OLD
+
 FIRMWARE :
 - Learning Wi-FI Manager
 - Connecting to MQTT
