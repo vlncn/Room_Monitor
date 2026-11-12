@@ -23,7 +23,7 @@ const long  gmtOffset_sec = 8 * 3600;
 const int   daylightOffset_sec = 0;
 const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
-constexpr uint32_t MEASURE_INTERVAL_MS = 1UL * 10UL * 1000UL; // 10 minutes
+constexpr uint32_t MEASURE_INTERVAL_MS = 60UL * 10UL * 1000UL; // 10 minutes
 // -----------------------------
 
 #define SCREEN_W 128
@@ -38,16 +38,14 @@ Adafruit_SSD1306 oled(SCREEN_W, SCREEN_H, &Wire, -1);
 Preferences preferences;
 
 QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
-QueueHandle_t jsonQueueBacklog; // To upload old data that doesn't get sent
-
-
+SemaphoreHandle_t LittleFSMutex;
+SemaphoreHandle_t I2CMutex;
 
 // Task handles (needed for task notifications)
 TaskHandle_t schedulerTaskHandle = nullptr;
 TaskHandle_t sensorTaskHandle    = nullptr;
 TaskHandle_t displayTaskHandle   = nullptr;
 TaskHandle_t networkTaskHandle   = nullptr;
-TaskHandle_t oldDataTaskHandle   = nullptr;
 
 struct ReadingResult {
     float temp = 0;
@@ -110,14 +108,17 @@ uint32_t getNextSequenceNumber() {
 }
 
 void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){  // Saving data in JSON format to littleFS to be used to upload old data
+    if (xSemaphoreTake(LittleFSMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
     File file = LittleFS.open(LOG_FILE, FILE_APPEND); // Mutex Log File
     if (!file) return;
     file.println(JSON);
     file.close();
+    xSemaphoreGive(I2CMutex);
     return;
 }
 
 void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while also save any failed upload 
+    if (xSemaphoreTake(LittleFSMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
     File file = LittleFS.open(LOG_FILE, FILE_READ);
     if (!file) return;
     if (!file.available()) return;
@@ -126,6 +127,9 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
     bool failed = false;
 
     char jsonBuffer[JSON_BUFFER_SIZE];
+    // Solution 1 : Upload data in queue (5) and after it is done go write the rest in to another log file repeat until there's no more data unsent
+    // Solution 2 : Use cursor to select which data to upload. upload data in batch (5). delete the log after 100 data(Edge Cases).
+    // Add handshake so the next data can be send after the data is successfully stored in database.
     while(file.available()){
         size_t len = file.readBytesUntil(
             '\n',
@@ -136,17 +140,17 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
         jsonBuffer[len] = '\0';
 
         // Skip empty lines
-        if (len == 0) continue;
+        if (len == 0) continue; // Add verify if data is not garbage
 
-        if (!client.publish("ROOM_LEVEL_1/backlog/data", jsonBuffer)){out.println(jsonBuffer); failed = true ;connectedtoMQTT = false;}
-        vTaskDelay(pdMS_TO_TICKS(15)); // Change this to make sure the data in SQL is saved then resume upload old data
+        if (!client.publish("ROOM_LEVEL_1/backlog/data", jsonBuffer)){out.println(jsonBuffer); failed = true ;}
+        //make sure the data in SQL is saved then resume upload old data
     }
     file.close();
     out.close();
     LittleFS.remove(LOG_FILE);
     if (failed) LittleFS.rename(TEMP_FILE, LOG_FILE);
     else        LittleFS.remove(TEMP_FILE);
-
+    xSemaphoreGive(I2CMutex);
     return;
 }
 
@@ -160,17 +164,19 @@ void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and q
            seq, data.temp, data.hum, data.time_measure);
 
     if(connectedtoMQTT) bypasstobuffer = false;
-    if(bypasstobuffer){SavetoLittleFS(localBuffer); return;}
+    
+    if(bypasstobuffer){
+        SavetoLittleFS(localBuffer); 
+        return;
+    }
+
     if(xQueueSend(jsonQueue, &localBuffer, 0) != pdPASS) {
         SavetoLittleFS(localBuffer);
-        while(uxQueueMessagesWaiting(jsonQueue) != 0){
-            xQueueReceive(jsonQueue, &localBuffer, 0);
-            SavetoLittleFS(localBuffer);
-        }
         bypasstobuffer = true;
     }
     return;
 }
+
 
 /*                             TASK                       */
 void SchedulerTask(void *Parameters) {
@@ -180,19 +186,6 @@ void SchedulerTask(void *Parameters) {
         xTaskNotifyGive(sensorTaskHandle);   // first measurement happens immediately at boot
         xTaskNotifyGive(networkTaskHandle);
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(MEASURE_INTERVAL_MS));
-    }
-}
-
-void UpOldDataTask(void *Paramaters){
-    char txBuffer[JSON_BUFFER_SIZE];
-    while (true) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        RetryConnection();
-        if (connectedtoMQTT){
-            client.loop();
-            ReadFromLittleFS();
-            retryCount = 0;
-        }
     }
 }
 
@@ -214,13 +207,14 @@ void NetworkTask(void *Parameters){
         else {
             retryCount = 0;
         }
-        if (LittleFS.exists(LOG_FILE)) {retryCount = 0; xTaskNotifyGive(oldDataTaskHandle);}
+        if (LittleFS.exists(LOG_FILE)) {retryCount = 0; ReadFromLittleFS();}
     }
 }
 
 void DisplayTask(void *Parameters) {
   while (true){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (xSemaphoreTake(I2CMutex, pdMS_TO_TICKS(500)) != pdTRUE) continue;
     ReadingResult snap;
     snap = latestread;
     oled.clearDisplay();
@@ -248,15 +242,23 @@ void DisplayTask(void *Parameters) {
     }
     // ADD ERROR HANDLE ON SENSOR OR MQTT
     oled.display();
+    xSemaphoreGive(I2CMutex);
   }
 }
 
 void SensorTask(void *Parameters) {
+    float h;
+    float t;
+    bool ok;
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        bool ok = bme.takeForcedMeasurement();
-        float t = bme.readTemperature();
-        float h = bme.readHumidity();
+        if (xSemaphoreTake(I2CMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+            if (ok = bme.takeForcedMeasurement()) {
+                t = bme.readTemperature();
+                h = bme.readHumidity();
+            }
+            xSemaphoreGive(I2CMutex);
+        }
         if (ok && !isnan(t) && !isnan(h)){
             sensorOk = true;
             latestread.temp = t; latestread.hum = h;
@@ -308,13 +310,13 @@ void setup() {
   oled.display();
 
   // RTOS STUFF
-  jsonQueue = xQueueCreate(6, JSON_BUFFER_SIZE);
-  jsonQueueBacklog = xQueueCreate(18, JSON_BUFFER_SIZE);
+  jsonQueue = xQueueCreate(1, JSON_BUFFER_SIZE);
+  LittleFSMutex = xSemaphoreCreateMutex();
+  I2CMutex = xSemaphoreCreateMutex();
   if (jsonQueue == NULL || jsonQueueBacklog == NULL) {
     Serial.println("Error creating the FreeRTOS Queue");
     return;
   }
-  xTaskCreatePinnedToCore(UpOldDataTask, "upload",    4096, nullptr, 1, &oldDataTaskHandle, 0);
   xTaskCreatePinnedToCore(NetworkTask,   "network",   4096, nullptr, 2, &networkTaskHandle, 0);
   xTaskCreatePinnedToCore(SensorTask,    "sensor",    4096, nullptr, 3, &sensorTaskHandle, 1);
   xTaskCreatePinnedToCore(DisplayTask,   "display",   4096, nullptr, 1, &displayTaskHandle, 1);

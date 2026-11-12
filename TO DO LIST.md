@@ -5,6 +5,7 @@ To be Added :
 - Deep Sleep and power management (Low Priority)
 
 ~~- Docker (TIG Stack) (Highest Priority)~~
+
 - OTA Firmware Update (High Priority 1)
 - Reliable Data Delivery (High Priority 2)
   - Telegraf Check
@@ -14,7 +15,7 @@ To be Added :
   ~~- MQTT Check~~
 - Error handling
 - Edge Cases
-  - Adding Mutex to protect I2C Buses and LittleFS(Storage)
+~~  - Adding Mutex to protect I2C Buses and LittleFS(Storage)~~
 ~~- Readme~~
 
 List of Known bugs :
