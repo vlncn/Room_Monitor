@@ -15,6 +15,12 @@ To be Added :
   - Adding Mutex to protect I2C Buses and LittleFS(Storage)
 - Readme
 
+List of Known bugs :
+- Uploading data is being sent from LittleFS (No Handshake during delivery process)
+- duting database timeout there no pulling from historic data (if it exists. if it doesnt exists then its a feature to not make database down)
+- No handling on sensor error. if sensor is not connected there's no error code to help with diagnostic
+- There's no device or service status or last will so everything is spagethi and hope everything is working normally
+
 OLD 
 FIRMWARE :
 - Learning Wi-FI Manager
