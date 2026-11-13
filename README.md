@@ -83,7 +83,7 @@ The MVP is shipped. The remaining work takes it from a working prototype to a pr
 - [ ] **OTA firmware updates** (high priority)
 - [ ] **Reliable data delivery** (high priority)
   - [ ] Fix the replay race (a reading buffered during a replay can be lost)
-  - [ ] Mutexes for the LittleFS log, the shared MQTT client and the I2C bus
+  - [x] Mutexes for the LittleFS log, the shared MQTT client and the I2C bus
   - [ ] Delivery confirmation (MQTT is QoS 0 via `PubSubClient`, so `publish()` success only means the packet was written to the socket not to database)
   - [ ] Health checks across ESP32, Telegraf and InfluxDB
   - [ ] Persist `message_id` across reboots (the `Preferences` code exists but is disabled)
