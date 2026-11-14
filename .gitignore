@@ -47,5 +47,4 @@ fp-info-cache
 *.kicad_prl
 
 # Sensitive Data
-*\config.h
 .env

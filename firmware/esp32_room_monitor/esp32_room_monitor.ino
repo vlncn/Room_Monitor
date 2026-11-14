@@ -10,8 +10,8 @@
 #include <Adafruit_SSD1306.h>
 #include <Preferences.h>
 #include <time.h>
-#include "config.h"
 #include <LittleFS.h>
+#include <WiFiManager.h>
 
 // ---------- CONFIG ----------
 const int      SDA_PIN    = 21;
@@ -31,6 +31,7 @@ constexpr uint32_t MEASURE_INTERVAL_MS = 60UL * 10UL * 1000UL; // 10 minutes
 #define JSON_BUFFER_SIZE 192
 
 WiFiClient espClient;
+WiFiManager wm;
 PubSubClient client(espClient);
 
 Adafruit_BME280  bme;
@@ -40,6 +41,7 @@ Preferences preferences;
 QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
 SemaphoreHandle_t LittleFSMutex;
 SemaphoreHandle_t I2CMutex;
+
 
 // Task handles (needed for task notifications)
 TaskHandle_t schedulerTaskHandle = nullptr;
@@ -59,6 +61,9 @@ bool bypasstobuffer = false;
 size_t retryCount = 0;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
 uint32_t sequenceNumber = 0;
+char mqtt_server[41];
+char mqtt_port[7];
+
 
 void GetTime(char *out, size_t len){ // Getting Timestamp from NTP Server
     time_t now = time(nullptr);
@@ -107,13 +112,44 @@ uint32_t getNextSequenceNumber() {
     return sequenceNumber;
 }
 
+void SetMQTTServerAddress() {
+  WiFiManagerParameter custom_mqtt_server("server", "MQTT Broker", mqtt_server, 40);
+  WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", mqtt_port, 6);
+
+  wm.addParameter(&custom_mqtt_server);
+  wm.addParameter(&custom_mqtt_port);
+
+  if (!wm.startConfigPortal("OnDemandAP")) {
+    Serial.println("Failed to connect and hit timeout");
+    ESP.restart();
+  }
+
+  strcpy(mqtt_server, custom_mqtt_server.getValue());
+  strcpy(mqtt_port, custom_mqtt_port.getValue());
+
+  preferences.putString("server", mqtt_server);
+  preferences.putString("port", mqtt_port);
+  return;
+}
+
+void LoadSavedMQTTServer(){
+  preferences.begin("mqtt-config", false);
+  bool savedmqtt = !preferences.getString("server", mqtt_server, sizeof(mqtt_server)) 
+  || !preferences.getString("port", mqtt_port, sizeof(mqtt_port));
+  if(savedmqtt) SetMQTTServerAddress(); // Has no way to dynamically change the MQTT Server, basically makes changing MQTT Server IP a more of a hassle
+  else wm.autoConnect();
+  preferences.end();
+  
+  return;
+}
+
 void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){  // Saving data in JSON format to littleFS to be used to upload old data
     if (xSemaphoreTake(LittleFSMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
     File file = LittleFS.open(LOG_FILE, FILE_APPEND); // Mutex Log File
     if (!file) return;
     file.println(JSON);
     file.close();
-    xSemaphoreGive(I2CMutex);
+    xSemaphoreGive(LittleFSMutex);
     return;
 }
 
@@ -150,7 +186,7 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
     LittleFS.remove(LOG_FILE);
     if (failed) LittleFS.rename(TEMP_FILE, LOG_FILE);
     else        LittleFS.remove(TEMP_FILE);
-    xSemaphoreGive(I2CMutex);
+    xSemaphoreGive(LittleFSMutex);
     return;
 }
 
@@ -177,7 +213,6 @@ void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and q
     return;
 }
 
-
 /*                             TASK                       */
 void SchedulerTask(void *Parameters) {
     while(!WaitForTimeSync(15000)){}
@@ -188,6 +223,7 @@ void SchedulerTask(void *Parameters) {
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(MEASURE_INTERVAL_MS));
     }
 }
+
 
 void NetworkTask(void *Parameters){
     char txBuffer[JSON_BUFFER_SIZE];
@@ -294,10 +330,10 @@ void setup() {
 
   // NETWORK STARTUP
   // Wi-Fi
-  WiFi.begin(ssid, password);
+  LoadSavedMQTTServer();
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
-  client.setServer(mqtt_server, 1883);
+  client.setServer(mqtt_server, atoi(mqtt_port));
   client.connect("ESP32_01_ROOM_LEVEL_1");
   
   
@@ -313,7 +349,7 @@ void setup() {
   jsonQueue = xQueueCreate(1, JSON_BUFFER_SIZE);
   LittleFSMutex = xSemaphoreCreateMutex();
   I2CMutex = xSemaphoreCreateMutex();
-  if (jsonQueue == NULL || jsonQueueBacklog == NULL) {
+  if (jsonQueue == NULL) {
     Serial.println("Error creating the FreeRTOS Queue");
     return;
   }

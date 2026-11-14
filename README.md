@@ -88,7 +88,7 @@ The MVP is shipped. The remaining work takes it from a working prototype to a pr
   - [ ] Health checks across ESP32, Telegraf and InfluxDB
   - [ ] Persist `message_id` across reboots (the `Preferences` code exists but is disabled)
 - [ ] **Error handling:** error codes for sensor, OLED, Wi-Fi and MQTT faults, and a connectivity indicator on the OLED
-- [ ] **Wi-Fi Manager:** provisioning without reflashing (medium priority)
+- [x] **Wi-Fi Manager:** provisioning without reflashing (medium priority)
 **Later**
  
 - [ ] Deep sleep and power management
