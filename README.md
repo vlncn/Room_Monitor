@@ -28,8 +28,7 @@ flowchart LR
     BME["BME280"] --> ST["SensorTask"]
     ST -->|"queue"| NT["NetworkTask"]
     ST -->|"queue full"| FS[("LittleFS")]
-    NT -->|"publish failed"| FS
-    FS --> UT["UpOldDataTask"]
+    NT -->|"publish failed"|
     ST --> DT["DisplayTask"] --> OLED["OLED"]
   end
   NT -->|"ROOM_LEVEL_1/now/data"| MQ["Mosquitto"]
@@ -111,14 +110,12 @@ cd Room_Monitor
 2. Add dashboard by importing `grafana/suhu-dashboard.json`.
 
 **Firmware:**
-1. In the Arduino IDE, install the ESP32 board package and the libraries PubSubClient, Adafruit BME280, Adafruit Unified Sensor, Adafruit GFX and Adafruit SSD1306.
-2. Create `config.h` next to the sketch (keep it out of git):
-   ```cpp
+1. In the Arduino IDE, install the ESP32 board package and the libraries PubSubClient, Adafruit BME280, Adafruit Unified Sensor, Adafruit GFX, Adafruit SSD1306 and Wi-Fi Manager.
    const char* ssid        = "YOUR_WIFI";
    const char* password    = "YOUR_PASSWORD";
    const char* mqtt_server = "192.168.x.x"; 
    ```
-3. Select your ESP32 board, then build and upload.
+2. Select your ESP32 board, then build and upload.
 
 ## Repository layout
 

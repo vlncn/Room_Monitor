@@ -25,6 +25,7 @@ To be Added :
 
 List of Known bugs :
 - Uploading data is being sent from LittleFS (No Handshake during delivery process)
+- Investigate on littleFS upload backlog witholding littleFSmutex?
 - during database timeout there no pulling from historic data (if it exists. if it doesnt exists then its a feature to not make database down)
 - No handling on sensor error. if sensor is not connected there's no error code to help with diagnostic
 - There's no device or service status or last will 
