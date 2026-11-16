@@ -79,13 +79,13 @@ The MVP is shipped. The remaining work takes it from a working prototype to a pr
 - [x] Grafana dashboard with city comparison and device-status indicator
 **Next: product hardening**
  
-- [ ] **OTA firmware updates** (high priority)
+- [ ] **OTA firmware updates** (high priority) (Last)
 - [ ] **Reliable data delivery** (high priority)
   - [ ] Fix the replay race (a reading buffered during a replay can be lost)
   - [x] Mutexes for the LittleFS log, the shared MQTT client and the I2C bus
-  - [ ] Delivery confirmation (MQTT is QoS 0 via `PubSubClient`, so `publish()` success only means the packet was written to the socket not to database)
-  - [ ] Health checks across ESP32, Telegraf and InfluxDB
-  - [ ] Persist `message_id` across reboots (the `Preferences` code exists but is disabled)
+  - [ ] ~~Delivery confirmation (MQTT is QoS 0 via `PubSubClient`, so `publish()` success only means the packet was written to the socket not to database)~~ (Out of scope)
+  - [In Progress] Health checks across ESP32, Telegraf and InfluxDB
+  - [x] Persist `message_id` across reboots (the `Preferences` code exists but is disabled)
 - [ ] **Error handling:** error codes for sensor, OLED, Wi-Fi and MQTT faults, and a connectivity indicator on the OLED
 - [x] **Wi-Fi Manager:** provisioning without reflashing (medium priority)
 **Later**

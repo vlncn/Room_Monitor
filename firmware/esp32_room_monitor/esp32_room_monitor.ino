@@ -23,12 +23,13 @@ const long  gmtOffset_sec = 8 * 3600;
 const int   daylightOffset_sec = 0;
 const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
-constexpr uint32_t MEASURE_INTERVAL_MS = 60UL * 10UL * 1000UL; // 10 minutes
+constexpr uint32_t MEASURE_INTERVAL_MS = 1UL * 10UL * 1000UL; // 10 minutes
 // -----------------------------
 
 #define SCREEN_W 128
 #define SCREEN_H 64
 #define JSON_BUFFER_SIZE 192
+#define SEQUENCE_BLOCK 100
 
 WiFiClient espClient;
 WiFiManager wm;
@@ -58,13 +59,15 @@ struct ReadingResult {
 bool sensorOk = false;
 bool connectedtoMQTT = false;
 bool bypasstobuffer = false;
-size_t retryCount = 0;
+bool callbackCalled = false;
+size_t retryCount;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
-uint32_t sequenceNumber = 0;
+uint32_t sequenceNumber;
+uint32_t reservedLimit;
 char mqtt_server[41];
 char mqtt_port[7];
 
-
+/*                             NTP SERVER                       */
 void GetTime(char *out, size_t len){ // Getting Timestamp from NTP Server
     time_t now = time(nullptr);
     struct tm utcInfo;
@@ -87,6 +90,7 @@ bool WaitForTimeSync(uint32_t timeoutMs) { // Function to wait for time sync fro
     return true;
 }
 
+/*                             SERVICES                       */
 bool CheckConnection() { // Check if ESP is connected to Wi-Fi or MQTT Broker
     if (WiFi.status() != WL_CONNECTED) {WiFi.reconnect(); return false;}
     if (!client.connected())  {client.connect("ESP32_01_ROOM_LEVEL_1");return false;}
@@ -99,18 +103,28 @@ void RetryConnection(){
         retryCount++;
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
+    client.loop();
 }
 
-void initSequenceNumber() {
-    preferences.begin("room-monitor", false);
-    sequenceNumber = preferences.getUInt("sequence", 0);
+void ReadPublishdata(char* topic, byte* payload, unsigned int length){
+    callbackCalled = true;
+    Serial.printf("\n[MQTT RECEIVED] Topic: %s\n", topic);
+
+    Serial.print("Payload: ");
+
+    for (unsigned int i = 0; i < length; i++)
+    {
+        Serial.print((char)payload[i]);
+    }
+
+    // Your JSON parsing follows here
 }
 
-uint32_t getNextSequenceNumber() {
-    sequenceNumber++;
-    preferences.putUInt("sequence", sequenceNumber);
-    return sequenceNumber;
-}
+// bool CheckServices(){
+//     if (connectedtoMQTT) return false;
+//     int client.subscribe(infrastructure/health/);
+//     return (connectedtoMQTT&&);
+// }
 
 void SetMQTTServerAddress() {
   WiFiManagerParameter custom_mqtt_server("server", "MQTT Broker", mqtt_server, 40);
@@ -143,10 +157,46 @@ void LoadSavedMQTTServer(){
   return;
 }
 
+/*                             Message ID Handler                       */
+void InitSequence() {
+
+    preferences.begin("storage", false);
+
+    uint32_t lastReserved = preferences.getUInt("seq", 0);
+
+    reservedLimit = lastReserved + SEQUENCE_BLOCK;
+
+    preferences.putUInt("seq", reservedLimit);
+
+    sequenceNumber = lastReserved + 1;
+
+    preferences.end();
+}
+
+uint32_t GetSequence() {
+    if (sequenceNumber > reservedLimit) {
+
+        preferences.begin("storage", false);
+
+        uint32_t lastReserved = preferences.getUInt("seq", 0);
+
+        reservedLimit = lastReserved + SEQUENCE_BLOCK;
+
+        preferences.putUInt("seq", reservedLimit);
+
+        preferences.end();
+
+        sequenceNumber = lastReserved + 1;
+    }
+
+    return sequenceNumber++;
+}
+
+/*                            Backlog Data Handler                       */
 void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){  // Saving data in JSON format to littleFS to be used to upload old data
     if (xSemaphoreTake(LittleFSMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
     File file = LittleFS.open(LOG_FILE, FILE_APPEND); // Mutex Log File
-    if (!file) return;
+    if (!file) {xSemaphoreGive(LittleFSMutex); return;}
     file.println(JSON);
     file.close();
     xSemaphoreGive(LittleFSMutex);
@@ -156,16 +206,13 @@ void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){  // Saving data in JSON format
 void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while also save any failed upload 
     if (xSemaphoreTake(LittleFSMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
     File file = LittleFS.open(LOG_FILE, FILE_READ);
-    if (!file) return;
-    if (!file.available()) return;
+    if (!file) {xSemaphoreGive(LittleFSMutex); return;}
+    if (!file.available()) {xSemaphoreGive(LittleFSMutex); return;}
     File out = LittleFS.open(TEMP_FILE, FILE_WRITE);
-    if (!out) { file.close(); return; }
+    if (!out) { file.close(); xSemaphoreGive(LittleFSMutex); return;}
     bool failed = false;
 
     char jsonBuffer[JSON_BUFFER_SIZE];
-    // Solution 1 : Upload data in queue (5) and after it is done go write the rest in to another log file repeat until there's no more data unsent
-    // Solution 2 : Use cursor to select which data to upload. upload data in batch (5). delete the log after 100 data(Edge Cases).
-    // Add handshake so the next data can be send after the data is successfully stored in database.
     while(file.available()){
         size_t len = file.readBytesUntil(
             '\n',
@@ -179,7 +226,6 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
         if (len == 0) continue; // Add verify if data is not garbage
 
         if (!client.publish("ROOM_LEVEL_1/backlog/data", jsonBuffer)){out.println(jsonBuffer); failed = true ;}
-        //make sure the data in SQL is saved then resume upload old data
     }
     file.close();
     out.close();
@@ -192,7 +238,7 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
 
 
 void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and queue the data before sending it to mqtt broker
-    uint32_t seq = sequenceNumber++;
+    uint32_t seq = sequenceNumber++; // GetSequence()
     char localBuffer[JSON_BUFFER_SIZE];
 
     snprintf(localBuffer, sizeof(localBuffer),
@@ -230,20 +276,20 @@ void NetworkTask(void *Parameters){
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         RetryConnection();
-        client.loop();
+        //Only try to upload when all services is online
+        if (!connectedtoMQTT) continue;
         if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE) {
-            if (client.publish("ROOM_LEVEL_1/now/data", txBuffer) && connectedtoMQTT) {
-                retryCount = 0;
+            if (client.publish("ROOM_LEVEL_1/now/data", txBuffer)) {
+                client.loop();
             } else {
                 SavetoLittleFS(txBuffer);
-                retryCount = 0;
                 connectedtoMQTT = false;
                 }
             } 
-        else {
-            retryCount = 0;
+        if (LittleFS.exists(LOG_FILE)) { 
+            ReadFromLittleFS();
         }
-        if (LittleFS.exists(LOG_FILE)) {retryCount = 0; ReadFromLittleFS();}
+        retryCount = 0;
     }
 }
 
@@ -315,7 +361,7 @@ void setup() {
   bme.begin(BME_ADDR);
   oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
   LittleFS.begin(true);
-  //initSequenceNumber();
+  //InitSequence();
 
   // SENSOR STARTUP
   
@@ -334,7 +380,9 @@ void setup() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
   client.setServer(mqtt_server, atoi(mqtt_port));
+  client.setCallback(ReadPublishdata);
   client.connect("ESP32_01_ROOM_LEVEL_1");
+  client.subscribe("infrastructure/health/timestamp");
   
   
   // OLED SETUP
@@ -351,7 +399,7 @@ void setup() {
   I2CMutex = xSemaphoreCreateMutex();
   if (jsonQueue == NULL) {
     Serial.println("Error creating the FreeRTOS Queue");
-    return;
+    ESP.restart();
   }
   xTaskCreatePinnedToCore(NetworkTask,   "network",   4096, nullptr, 2, &networkTaskHandle, 0);
   xTaskCreatePinnedToCore(SensorTask,    "sensor",    4096, nullptr, 3, &sensorTaskHandle, 1);
