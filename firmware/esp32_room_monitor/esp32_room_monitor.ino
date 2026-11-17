@@ -23,8 +23,9 @@ const long  gmtOffset_sec = 8 * 3600;
 const int   daylightOffset_sec = 0;
 const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
-constexpr uint32_t MEASURE_INTERVAL_MS = 1UL * 10UL * 1000UL; // 10 minutes
+constexpr uint32_t MEASURE_INTERVAL_MS = 60UL * 10UL * 1000UL; // 10 minutes
 // -----------------------------
+
 
 #define SCREEN_W 128
 #define SCREEN_H 64
@@ -59,19 +60,22 @@ struct ReadingResult {
 bool sensorOk = false;
 bool connectedtoMQTT = false;
 bool bypasstobuffer = false;
-bool callbackCalled = false;
+bool isCalled = false;
 size_t retryCount;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
 uint32_t sequenceNumber;
 uint32_t reservedLimit;
+time_t nowMs;
 char mqtt_server[41];
 char mqtt_port[7];
+
 
 /*                             NTP SERVER                       */
 void GetTime(char *out, size_t len){ // Getting Timestamp from NTP Server
     time_t now = time(nullptr);
     struct tm utcInfo;
     gmtime_r(&now, &utcInfo);
+    nowMs = now;
     strftime(
     out,
     len,
@@ -90,10 +94,31 @@ bool WaitForTimeSync(uint32_t timeoutMs) { // Function to wait for time sync fro
     return true;
 }
 
+
+bool getInt64(const char* json, const char* key, int64_t& out) { // Finds "key":<integer> in a flat JSON string
+  char pattern[48];
+  snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+
+  const char* p = strstr(json, pattern);
+  if (!p) return false;
+
+  p = strchr(p + strlen(pattern), ':');
+  if (!p) return false;
+  p++;
+
+  char* end;
+  long long v = strtoll(p, &end, 10);   // skips leading spaces
+  if (end == p) return false;
+
+  out = v;
+  return true;
+}
+
 /*                             SERVICES                       */
 bool CheckConnection() { // Check if ESP is connected to Wi-Fi or MQTT Broker
     if (WiFi.status() != WL_CONNECTED) {WiFi.reconnect(); return false;}
     if (!client.connected())  {client.connect("ESP32_01_ROOM_LEVEL_1");return false;}
+    Serial.println("Check Connect");
     return true;
 }
 
@@ -104,20 +129,27 @@ void RetryConnection(){
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
     client.loop();
+    return;
 }
 
 void ReadPublishdata(char* topic, byte* payload, unsigned int length){
-    callbackCalled = true;
-    Serial.printf("\n[MQTT RECEIVED] Topic: %s\n", topic);
+    char buf[256];
+    if (length >= sizeof(buf)) return;
+    memcpy(buf, payload, length);
+    buf[length] = '\0';
 
-    Serial.print("Payload: ");
-
-    for (unsigned int i = 0; i < length; i++)
-    {
-        Serial.print((char)payload[i]);
+    int64_t influxMs, telegrafMs;
+    if (!getInt64(buf, "influxdb_timestamp", influxMs) ||
+        !getInt64(buf, "telegraf_timestamp", telegrafMs)) {
+    Serial.println("parse failed");
+    return;
     }
 
-    // Your JSON parsing follows here
+    Serial.println(nowMs);
+    Serial.println(telegrafMs);
+    Serial.println((influxMs/1000) - nowMs);
+    return;
+
 }
 
 // bool CheckServices(){
@@ -236,7 +268,7 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
     return;
 }
 
-
+/*                            Parsing Data                       */
 void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and queue the data before sending it to mqtt broker
     uint32_t seq = sequenceNumber++; // GetSequence()
     char localBuffer[JSON_BUFFER_SIZE];
