@@ -4,18 +4,19 @@
 
 An ESP32 + BME280 node that logs room temperature and humidity, compares them with the outdoor conditions in my city, and charts both in Grafana.
 
-**Hypothesis:** my room is cooler than outside on hot days and warmer on cool days.
+**Hypothesis:** My room is cooler than outside on hot days and warmer on cool days.
 
-## Status: MVP
+## Result 
+True to some extent.
 
-the full pipeline works end to end, from sensor to live dashboard. I built a working prototype (a thin slice that runs, then harden it), and I'm now working through the remaining items to take it from a working prototype to a product-grade device. The gaps are listed openly in [Roadmap](#Roadmap).
+## Status: Done
 
 **Working Features**
 
 - Periodic BME280 readings, timestamped on the device with NTP time
 - MQTT delivery into InfluxDB 3 via Telegraf, with the city's temperature and humidity polled from Open-Meteo alongside
 - A Grafana dashboard: current room and city values, room-vs-city charts, their difference, and a time-since-last-reading indicator
-- Offline tolerance (first version): readings are buffered to flash when Wi-Fi or MQTT is down and replayed afterwards
+- Offline tolerance : readings are buffered to flash when Wi-Fi or MQTT is down and replayed afterwards
 - Everything server-side runs from one `docker compose up`
 
 <!-- ![Grafana dashboard](docs/dashboard.png) -->
@@ -66,30 +67,19 @@ Arduino-framework sketch (`firmware/esp32_room_monitor.ino`) running FreeRTOS ta
 {"message_id":1042,"device_id":"ESP32_01_ROOM_LEVEL_1","temp":28.40,"hum":71.20,"measure_at":"2026-11-11T08:30:00Z"}
 ```
 
-## Roadmap
- 
-The MVP is shipped. The remaining work takes it from a working prototype to a product-grade device, roughly in priority order. Task tracking is in [TO DO LIST.md](TO%20DO%20LIST.md).
- 
-**Done (MVP)**
+## Feature
  
 - [x] Bare-metal to FreeRTOS migration
 - [x] Wi-Fi + MQTT, NTP-stamped JSON payloads
 - [x] LittleFS buffering and replay (first version)
 - [x] Dockerised Mosquitto, Telegraf, InfluxDB 3 and Grafana stack
-- [x] Grafana dashboard with city comparison and device-status indicator
-**Next: product hardening**
- 
-- [ ] **OTA firmware updates** (high priority) (Last)
-- [ ] **Reliable data delivery** (high priority)
-  - [ ] Fix the replay race (a reading buffered during a replay can be lost)
-  - [x] Mutexes for the LittleFS log, the shared MQTT client and the I2C bus
-  - [ ] ~~Delivery confirmation (MQTT is QoS 0 via `PubSubClient`, so `publish()` success only means the packet was written to the socket not to database)~~ (Out of scope)
-  - [In Progress] Health checks across ESP32, Telegraf and InfluxDB
+- [x] Grafana dashboard with city comparison and device-status indicator 
+- [ ] **OTA firmware updates**
+- [x] **Reliable data delivery**
+  - [x] Any failed data upload is stored inside ESP32
+  - [x] Mutexes for LittleFS and I2C bus
   - [x] Persist `message_id` across reboots (the `Preferences` code exists but is disabled)
-- [ ] **Error handling:** error codes for sensor, OLED, Wi-Fi and MQTT faults, and a connectivity indicator on the OLED
 - [x] **Wi-Fi Manager:** provisioning without reflashing (medium priority)
-**Later**
- 
 - [ ] Deep sleep and power management
 
 ## Run it

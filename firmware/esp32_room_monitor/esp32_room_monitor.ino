@@ -25,8 +25,6 @@ const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
 constexpr uint32_t MEASURE_INTERVAL_MS = 60UL * 10UL * 1000UL; // 10 minutes
 // -----------------------------
-
-
 #define SCREEN_W 128
 #define SCREEN_H 64
 #define JSON_BUFFER_SIZE 192
@@ -60,12 +58,10 @@ struct ReadingResult {
 bool sensorOk = false;
 bool connectedtoMQTT = false;
 bool bypasstobuffer = false;
-bool isCalled = false;
 size_t retryCount;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
 uint32_t sequenceNumber;
 uint32_t reservedLimit;
-time_t nowMs;
 char mqtt_server[41];
 char mqtt_port[7];
 
@@ -75,7 +71,6 @@ void GetTime(char *out, size_t len){ // Getting Timestamp from NTP Server
     time_t now = time(nullptr);
     struct tm utcInfo;
     gmtime_r(&now, &utcInfo);
-    nowMs = now;
     strftime(
     out,
     len,
@@ -94,31 +89,10 @@ bool WaitForTimeSync(uint32_t timeoutMs) { // Function to wait for time sync fro
     return true;
 }
 
-
-bool getInt64(const char* json, const char* key, int64_t& out) { // Finds "key":<integer> in a flat JSON string
-  char pattern[48];
-  snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-
-  const char* p = strstr(json, pattern);
-  if (!p) return false;
-
-  p = strchr(p + strlen(pattern), ':');
-  if (!p) return false;
-  p++;
-
-  char* end;
-  long long v = strtoll(p, &end, 10);   // skips leading spaces
-  if (end == p) return false;
-
-  out = v;
-  return true;
-}
-
 /*                             SERVICES                       */
 bool CheckConnection() { // Check if ESP is connected to Wi-Fi or MQTT Broker
     if (WiFi.status() != WL_CONNECTED) {WiFi.reconnect(); return false;}
     if (!client.connected())  {client.connect("ESP32_01_ROOM_LEVEL_1");return false;}
-    Serial.println("Check Connect");
     return true;
 }
 
@@ -132,31 +106,7 @@ void RetryConnection(){
     return;
 }
 
-void ReadPublishdata(char* topic, byte* payload, unsigned int length){
-    char buf[256];
-    if (length >= sizeof(buf)) return;
-    memcpy(buf, payload, length);
-    buf[length] = '\0';
 
-    int64_t influxMs, telegrafMs;
-    if (!getInt64(buf, "influxdb_timestamp", influxMs) ||
-        !getInt64(buf, "telegraf_timestamp", telegrafMs)) {
-    Serial.println("parse failed");
-    return;
-    }
-
-    Serial.println(nowMs);
-    Serial.println(telegrafMs);
-    Serial.println((influxMs/1000) - nowMs);
-    return;
-
-}
-
-// bool CheckServices(){
-//     if (connectedtoMQTT) return false;
-//     int client.subscribe(infrastructure/health/);
-//     return (connectedtoMQTT&&);
-// }
 
 void SetMQTTServerAddress() {
   WiFiManagerParameter custom_mqtt_server("server", "MQTT Broker", mqtt_server, 40);
@@ -255,7 +205,7 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
         jsonBuffer[len] = '\0';
 
         // Skip empty lines
-        if (len == 0) continue; // Add verify if data is not garbage
+        if (len == 0) continue;
 
         if (!client.publish("ROOM_LEVEL_1/backlog/data", jsonBuffer)){out.println(jsonBuffer); failed = true ;}
     }
@@ -311,17 +261,15 @@ void NetworkTask(void *Parameters){
         //Only try to upload when all services is online
         if (!connectedtoMQTT) continue;
         if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE) {
-            if (client.publish("ROOM_LEVEL_1/now/data", txBuffer)) {
-                client.loop();
-            } else {
+            if (!client.publish("ROOM_LEVEL_1/now/data", txBuffer)) {
                 SavetoLittleFS(txBuffer);
-                connectedtoMQTT = false;
                 }
             } 
         if (LittleFS.exists(LOG_FILE)) { 
             ReadFromLittleFS();
         }
         retryCount = 0;
+        connectedtoMQTT = false;
     }
 }
 
@@ -354,7 +302,6 @@ void DisplayTask(void *Parameters) {
         oled.setCursor(0, 42);
         oled.print("ERROR");
     }
-    // ADD ERROR HANDLE ON SENSOR OR MQTT
     oled.display();
     xSemaphoreGive(I2CMutex);
   }
@@ -412,9 +359,7 @@ void setup() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
   client.setServer(mqtt_server, atoi(mqtt_port));
-  client.setCallback(ReadPublishdata);
   client.connect("ESP32_01_ROOM_LEVEL_1");
-  client.subscribe("infrastructure/health/timestamp");
   
   
   // OLED SETUP

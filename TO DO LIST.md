@@ -1,34 +1,30 @@
 ## Make it Product Grade
 
 To be Added :
-- Wi-Fi Manager (Medium Priority)
-- Deep Sleep and power management (Low Priority)
+~~- Wi-Fi Manager (Medium Priority)~~
+- Deep Sleep and power management (Sunday)
 
 ~~- Docker (TIG Stack) (Highest Priority)~~
 
-- OTA Firmware Update (High Priority 1)
-- Reliable Data Delivery (High Priority 2)
-  - Telegraf Check
-  - Influxdb Check
-  - ESP32 Check
-    - Sensor Error Code 
-  ~~- MQTT Check~~
-- Error handling
+- OTA Firmware Update (Saturday)
+~~- Reliable Data Delivery (High Priority 2)~~
+~~  - Telegraf Check~~
+~~  - Influxdb Check~~
+~~  - ESP32 Check~~
+~~    - Sensor Error Code ~~
+~~  - MQTT Check~~
+- Error handling (Wednesday - Friday)
   - Restart the bme/ oled device after replugging? (learn how event interrupt? if there's new address on sda/scl channel and check the address and restart accordingly?)
-  - Show the error if The MQTT/Wi-Fi/DB/Telegraf is not online and sensor is not connected in OLED
-  - Also show error or health check on grafana.
-  - add last will to all device
-  - adding device id to every esp32 using mqtt?
-- Edge Cases
+~~- Edge Cases~~
 ~~  - Adding Mutex to protect I2C Buses and LittleFS(Storage)~~
 ~~- Readme~~
 
 List of Known bugs :
-- Uploading data is being sent from LittleFS (No Handshake during delivery process)
-- Investigate on littleFS upload backlog witholding littleFSmutex?
-- during database timeout there no pulling from historic data (if it exists. if it doesnt exists then its a feature to not make database down)
+~~- Uploading data is being sent from LittleFS (No Handshake during delivery process)~~
+~~- Investigate on littleFS upload backlog witholding littleFSmutex?~~
+~~- during database timeout there no pulling from historic data (if it exists. if it doesnt exists then its a feature to not make database down)~~
 - No handling on sensor error. if sensor is not connected there's no error code to help with diagnostic
-- There's no device or service status or last will 
+~~- There's no device or service status or last will~~ 
 
 ## OLD
 
