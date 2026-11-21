@@ -25,10 +25,12 @@ const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
 constexpr uint32_t MEASURE_INTERVAL_MS = 60UL * 10UL * 1000UL; // 10 minutes
 // -----------------------------
+
 #define SCREEN_W 128
 #define SCREEN_H 64
 #define JSON_BUFFER_SIZE 192
 #define SEQUENCE_BLOCK 100
+#define uS_TO_MS_FACTOR 1000
 
 WiFiClient espClient;
 WiFiManager wm;
@@ -38,9 +40,10 @@ Adafruit_BME280  bme;
 Adafruit_SSD1306 oled(SCREEN_W, SCREEN_H, &Wire, -1);
 Preferences preferences;
 
-QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
-SemaphoreHandle_t LittleFSMutex;
-SemaphoreHandle_t I2CMutex;
+static QueueHandle_t jsonQueue; // Creating Queue to not mismatch between timestamp and sensor reading
+static SemaphoreHandle_t LittleFSMutex;
+static SemaphoreHandle_t I2CMutex;
+static SemaphoreHandle_t TaskSemaphore;
 
 
 // Task handles (needed for task notifications)
@@ -48,6 +51,7 @@ TaskHandle_t schedulerTaskHandle = nullptr;
 TaskHandle_t sensorTaskHandle    = nullptr;
 TaskHandle_t displayTaskHandle   = nullptr;
 TaskHandle_t networkTaskHandle   = nullptr;
+TaskHandle_t SleepTaskHandle     = nullptr;
 
 struct ReadingResult {
     float temp = 0;
@@ -58,10 +62,11 @@ struct ReadingResult {
 bool sensorOk = false;
 bool connectedtoMQTT = false;
 bool bypasstobuffer = false;
-size_t retryCount;
+uint8_t retryCount;
+uint8_t num_of_task = 4;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
-uint32_t sequenceNumber;
-uint32_t reservedLimit;
+RTC_DATA_ATTR uint16_t sequenceNumber;
+uint16_t reservedLimit;
 char mqtt_server[41];
 char mqtt_port[7];
 
@@ -100,13 +105,11 @@ void RetryConnection(){
     while (retryCount < 3 && !connectedtoMQTT) {
         if (connectedtoMQTT = CheckConnection()) break;
         retryCount++;
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
     client.loop();
     return;
 }
-
-
 
 void SetMQTTServerAddress() {
   WiFiManagerParameter custom_mqtt_server("server", "MQTT Broker", mqtt_server, 40);
@@ -125,6 +128,7 @@ void SetMQTTServerAddress() {
 
   preferences.putString("server", mqtt_server);
   preferences.putString("port", mqtt_port);
+
   return;
 }
 
@@ -141,36 +145,25 @@ void LoadSavedMQTTServer(){
 
 /*                             Message ID Handler                       */
 void InitSequence() {
-
     preferences.begin("storage", false);
-
-    uint32_t lastReserved = preferences.getUInt("seq", 0);
-
+    uint16_t lastReserved = preferences.getUInt("seq", 0);
     reservedLimit = lastReserved + SEQUENCE_BLOCK;
-
     preferences.putUInt("seq", reservedLimit);
-
     sequenceNumber = lastReserved + 1;
-
     preferences.end();
+
+    return;
 }
 
-uint32_t GetSequence() {
+uint16_t GetSequence() {
     if (sequenceNumber > reservedLimit) {
-
         preferences.begin("storage", false);
-
-        uint32_t lastReserved = preferences.getUInt("seq", 0);
-
+        uint16_t lastReserved = preferences.getUInt("seq", 0);
         reservedLimit = lastReserved + SEQUENCE_BLOCK;
-
         preferences.putUInt("seq", reservedLimit);
-
         preferences.end();
-
         sequenceNumber = lastReserved + 1;
     }
-
     return sequenceNumber++;
 }
 
@@ -220,7 +213,7 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
 
 /*                            Parsing Data                       */
 void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and queue the data before sending it to mqtt broker
-    uint32_t seq = sequenceNumber++; // GetSequence()
+    uint16_t seq = sequenceNumber++; // GetSequence()
     char localBuffer[JSON_BUFFER_SIZE];
 
     snprintf(localBuffer, sizeof(localBuffer),
@@ -243,18 +236,30 @@ void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and q
 
 /*                             TASK                       */
 void SchedulerTask(void *Parameters) {
+    TickType_t lastWake = xTaskGetTickCount();
     while(!WaitForTimeSync(15000)){}
+    xTaskNotifyGive(sensorTaskHandle);
+    xTaskNotifyGive(networkTaskHandle);
+    xSemaphoreGive(TaskSemaphore);
+    while (true){
+        if(uxSemaphoreGetCount(TaskSemaphore) == num_of_task) xTaskNotifyGive(SleepTaskHandle);
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(1));
+    }
+    
+}
+
+void SleepTask(void *Parameters){
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
-        xTaskNotifyGive(sensorTaskHandle);   // first measurement happens immediately at boot
-        xTaskNotifyGive(networkTaskHandle);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(MEASURE_INTERVAL_MS));
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        esp_sleep_enable_timer_wakeup(MEASURE_INTERVAL_MS * uS_TO_MS_FACTOR);
+        esp_deep_sleep_start();
     }
 }
 
-
 void NetworkTask(void *Parameters){
     char txBuffer[JSON_BUFFER_SIZE];
+    client.connect("ESP32_01_ROOM_LEVEL_1");
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         RetryConnection();
@@ -263,6 +268,7 @@ void NetworkTask(void *Parameters){
         if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE) {
             if (!client.publish("ROOM_LEVEL_1/now/data", txBuffer)) {
                 SavetoLittleFS(txBuffer);
+                Serial.println("Data not Uploaded");
                 }
             } 
         if (LittleFS.exists(LOG_FILE)) { 
@@ -270,6 +276,7 @@ void NetworkTask(void *Parameters){
         }
         retryCount = 0;
         connectedtoMQTT = false;
+        xSemaphoreGive(TaskSemaphore);
     }
 }
 
@@ -303,6 +310,7 @@ void DisplayTask(void *Parameters) {
         oled.print("ERROR");
     }
     oled.display();
+    xSemaphoreGive(TaskSemaphore);
     xSemaphoreGive(I2CMutex);
   }
 }
@@ -328,6 +336,7 @@ void SensorTask(void *Parameters) {
         } else {
             sensorOk = false;
         }
+        xSemaphoreGive(TaskSemaphore);
         xTaskNotifyGive(displayTaskHandle);
     }
 }
@@ -359,7 +368,6 @@ void setup() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
   client.setServer(mqtt_server, atoi(mqtt_port));
-  client.connect("ESP32_01_ROOM_LEVEL_1");
   
   
   // OLED SETUP
@@ -374,6 +382,7 @@ void setup() {
   jsonQueue = xQueueCreate(1, JSON_BUFFER_SIZE);
   LittleFSMutex = xSemaphoreCreateMutex();
   I2CMutex = xSemaphoreCreateMutex();
+  TaskSemaphore = xSemaphoreCreateCounting(num_of_task,0);
   if (jsonQueue == NULL) {
     Serial.println("Error creating the FreeRTOS Queue");
     ESP.restart();
@@ -382,6 +391,8 @@ void setup() {
   xTaskCreatePinnedToCore(SensorTask,    "sensor",    4096, nullptr, 3, &sensorTaskHandle, 1);
   xTaskCreatePinnedToCore(DisplayTask,   "display",   4096, nullptr, 1, &displayTaskHandle, 1);
   xTaskCreatePinnedToCore(SchedulerTask, "scheduler", 2048, nullptr, 4, &schedulerTaskHandle, 1);
+  xTaskCreatePinnedToCore(SleepTask,     "sleep",     2048, nullptr, 1, &SleepTaskHandle, 1);
+
 }
 
 void loop() {

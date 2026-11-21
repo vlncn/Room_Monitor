@@ -80,7 +80,7 @@ Arduino-framework sketch (`firmware/esp32_room_monitor.ino`) running FreeRTOS ta
   - [x] Mutexes for LittleFS and I2C bus
   - [x] Persist `message_id` across reboots (the `Preferences` code exists but is disabled)
 - [x] **Wi-Fi Manager:** provisioning without reflashing (medium priority)
-- [ ] Deep sleep and power management
+- [x] Deep sleep
 
 ## Run it
 
