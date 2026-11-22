@@ -19,7 +19,7 @@ An ESP32 + BME280 node that logs room temperature and humidity, compares them wi
 - [x] LittleFS buffering and replay
 - [x] Dockerised Mosquitto, Telegraf, InfluxDB 3 and Grafana stack
 - [x] Grafana dashboard with city comparison
-- [ ] **OTA firmware updates**
+- [x] **OTA firmware updates**
 - [x] **Reliable data delivery**
   - [x] Any failed upload data to MQTT is stored inside ESP32
   - [x] Mutexes for LittleFS and I2C bus
