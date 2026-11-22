@@ -12,18 +12,24 @@
 #include <time.h>
 #include <LittleFS.h>
 #include <WiFiManager.h>
+#include <HTTPClient.h>
+#include <Update.h>
 
 // ---------- CONFIG ----------
 const int      SDA_PIN    = 21;
 const int      SCL_PIN    = 22;
-const uint8_t  BME_ADDR   = 0x76;   // try 0x77 if not found
-const uint8_t  OLED_ADDR  = 0x3C;   // try 0x3D if not found
+const uint8_t  BME_ADDR   = 0x76;
+const uint8_t  OLED_ADDR  = 0x3C;
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 8 * 3600;
 const int   daylightOffset_sec = 0;
 const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
-constexpr uint32_t MEASURE_INTERVAL_MS = 60UL * 10UL * 1000UL; // 10 minutes
+const char* versionUrl= "https://raw.githubusercontent.com/vlncn/Room_Monitor/tree/Product-grade/version.txt";
+const char* firmwareUrl = "";
+const char* currentFirmwareVersion = "1.0.0";
+
+constexpr uint32_t MEASURE_INTERVAL_MS = 10UL * 60UL * 1000UL;
 // -----------------------------
 
 #define SCREEN_W 128
@@ -46,7 +52,7 @@ static SemaphoreHandle_t I2CMutex;
 static SemaphoreHandle_t TaskSemaphore;
 
 
-// Task handles (needed for task notifications)
+// Task handles
 TaskHandle_t schedulerTaskHandle = nullptr;
 TaskHandle_t sensorTaskHandle    = nullptr;
 TaskHandle_t displayTaskHandle   = nullptr;
@@ -65,7 +71,9 @@ bool bypasstobuffer = false;
 uint8_t retryCount;
 uint8_t num_of_task = 4;
 ReadingResult latestread; //Creating latest read Struct to display in OLED
+RTC_DATA_ATTR time_t Startuptime;
 RTC_DATA_ATTR uint16_t sequenceNumber;
+RTC_DATA_ATTR bool alreadyOn;
 uint16_t reservedLimit;
 char mqtt_server[41];
 char mqtt_port[7];
@@ -74,6 +82,7 @@ char mqtt_port[7];
 /*                             NTP SERVER                       */
 void GetTime(char *out, size_t len){ // Getting Timestamp from NTP Server
     time_t now = time(nullptr);
+    if (!alreadyOn) Startuptime = time(nullptr);
     struct tm utcInfo;
     gmtime_r(&now, &utcInfo);
     strftime(
@@ -85,7 +94,6 @@ void GetTime(char *out, size_t len){ // Getting Timestamp from NTP Server
 };
 
 bool WaitForTimeSync(uint32_t timeoutMs) { // Function to wait for time sync from NTP Server
-    // time() returns ~0 (1970) until NTP has synced
     uint32_t start = millis();
     while (time(nullptr) < 1700000000) {
         if (millis() - start > timeoutMs) return false;
@@ -143,6 +151,81 @@ void LoadSavedMQTTServer(){
   return;
 }
 
+/*                                   OTA                                 */
+bool CheckForUpdate(){
+    if (time(nullptr) - Startuptime >= 86400){
+        String latestVersion = fetchLatestVersion();
+        if (latestVersion == "") {
+            return;
+        }
+      // Step 2: Compare versions
+        if (latestVersion != currentFirmwareVersion) {
+            downloadAndApplyFirmware();
+        }
+    }
+}
+
+String fetchLatestVersion() {
+  HTTPClient http;
+  http.begin(versionUrl);
+
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) {
+    String latestVersion = http.getString();
+    latestVersion.trim();
+    http.end();
+    return latestVersion;
+  } else {
+    http.end();
+    return "";
+  }
+}
+
+void downloadAndApplyFirmware() {
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.begin(firmwareUrl);
+
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK) return;
+  int contentLength = http.getSize();
+  if (contentLength <= 0)  return;
+  WiFiClient* stream = http.getStreamPtr();
+  if (startOTAUpdate(stream, contentLength)) ESP.restart();
+  http.end();
+}
+
+
+bool startOTAUpdate(WiFiClient* client, int contentLength) {
+  if (!Update.begin(contentLength)) return false;
+
+  size_t written = 0;
+
+  // Timeout variables
+  const unsigned long timeoutDuration = 120*1000;  // 10 seconds timeout
+  unsigned long lastDataTime = millis();
+
+  while (written < contentLength) {
+    if (client->available()) {
+      uint8_t buffer[128];
+      size_t len = client->read(buffer, sizeof(buffer));
+      if (len > 0) {
+        Update.write(buffer, len);
+        written += len;
+        lastDataTime = millis();
+      }
+    }
+    // Check for timeout
+    if (millis() - lastDataTime > timeoutDuration) {Update.abort(); return false;}
+    yield();
+  }
+
+  if (written != contentLength) {Update.abort(); return false;}
+  if (!Update.end()) return false;
+  return true;
+}
+
 /*                             Message ID Handler                       */
 void InitSequence() {
     preferences.begin("storage", false);
@@ -170,7 +253,7 @@ uint16_t GetSequence() {
 /*                            Backlog Data Handler                       */
 void SavetoLittleFS(char JSON[JSON_BUFFER_SIZE]){  // Saving data in JSON format to littleFS to be used to upload old data
     if (xSemaphoreTake(LittleFSMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
-    File file = LittleFS.open(LOG_FILE, FILE_APPEND); // Mutex Log File
+    File file = LittleFS.open(LOG_FILE, FILE_APPEND);
     if (!file) {xSemaphoreGive(LittleFSMutex); return;}
     file.println(JSON);
     file.close();
@@ -220,16 +303,8 @@ void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and q
            "{\"message_id\":%lu,\"device_id\":\"ESP32_01_ROOM_LEVEL_1\",\"temp\":%.2f,\"hum\":%.2f,\"measure_at\":\"%s\"}",
            seq, data.temp, data.hum, data.time_measure);
 
-    if(connectedtoMQTT) bypasstobuffer = false;
-    
-    if(bypasstobuffer){
-        SavetoLittleFS(localBuffer); 
-        return;
-    }
-
     if(xQueueSend(jsonQueue, &localBuffer, 0) != pdPASS) {
         SavetoLittleFS(localBuffer);
-        bypasstobuffer = true;
     }
     return;
 }
@@ -249,41 +324,33 @@ void SchedulerTask(void *Parameters) {
 }
 
 void SleepTask(void *Parameters){
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    while (true) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        esp_sleep_enable_timer_wakeup(MEASURE_INTERVAL_MS * uS_TO_MS_FACTOR);
-        esp_deep_sleep_start();
-    }
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    alreadyOn = 1;
+    CheckForUpdate();
+    esp_sleep_enable_timer_wakeup((MEASURE_INTERVAL_MS - millis()) * uS_TO_MS_FACTOR );
+    esp_deep_sleep_start();
 }
 
 void NetworkTask(void *Parameters){
     char txBuffer[JSON_BUFFER_SIZE];
     client.connect("ESP32_01_ROOM_LEVEL_1");
-    while(true){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        RetryConnection();
-        //Only try to upload when all services is online
-        if (!connectedtoMQTT) continue;
-        if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE) {
-            if (!client.publish("ROOM_LEVEL_1/now/data", txBuffer)) {
-                SavetoLittleFS(txBuffer);
-                Serial.println("Data not Uploaded");
-                }
-            } 
-        if (LittleFS.exists(LOG_FILE)) { 
-            ReadFromLittleFS();
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    RetryConnection();
+    // This thing need refactor
+    if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE);
+        if (!client.publish("ROOM_LEVEL_1/now/data", txBuffer) || !connectedtoMQTT) {
+            SavetoLittleFS(txBuffer);
         }
-        retryCount = 0;
-        connectedtoMQTT = false;
-        xSemaphoreGive(TaskSemaphore);
+    if (LittleFS.exists(LOG_FILE) && connectedtoMQTT) { 
+        ReadFromLittleFS();
     }
+    xSemaphoreGive(TaskSemaphore);
+    vTaskDelete(nullptr);
 }
 
 void DisplayTask(void *Parameters) {
-  while (true){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (xSemaphoreTake(I2CMutex, pdMS_TO_TICKS(500)) != pdTRUE) continue;
+    xSemaphoreTake(I2CMutex, pdMS_TO_TICKS(500));
     ReadingResult snap;
     snap = latestread;
     oled.clearDisplay();
@@ -312,33 +379,32 @@ void DisplayTask(void *Parameters) {
     oled.display();
     xSemaphoreGive(TaskSemaphore);
     xSemaphoreGive(I2CMutex);
-  }
+    vTaskDelete(nullptr);
 }
 
 void SensorTask(void *Parameters) {
     float h;
     float t;
     bool ok;
-    while(true){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (xSemaphoreTake(I2CMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
-            if (ok = bme.takeForcedMeasurement()) {
-                t = bme.readTemperature();
-                h = bme.readHumidity();
-            }
-            xSemaphoreGive(I2CMutex);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (xSemaphoreTake(I2CMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        if (ok = bme.takeForcedMeasurement()) {
+            t = bme.readTemperature();
+            h = bme.readHumidity();
         }
-        if (ok && !isnan(t) && !isnan(h)){
-            sensorOk = true;
-            latestread.temp = t; latestread.hum = h;
-            GetTime(latestread.time_measure, sizeof(latestread.time_measure));
-            datatoJSon(latestread);
-        } else {
-            sensorOk = false;
-        }
-        xSemaphoreGive(TaskSemaphore);
-        xTaskNotifyGive(displayTaskHandle);
+        xSemaphoreGive(I2CMutex);
     }
+    if (ok && !isnan(t) && !isnan(h)){
+        sensorOk = true;
+        latestread.temp = t; latestread.hum = h;
+        GetTime(latestread.time_measure, sizeof(latestread.time_measure));
+        datatoJSon(latestread);
+    } else {
+        sensorOk = false;
+    }
+    xSemaphoreGive(TaskSemaphore);
+    xTaskNotifyGive(displayTaskHandle);
+    vTaskDelete(nullptr);
 }
 
 void setup() {
@@ -349,7 +415,6 @@ void setup() {
   bme.begin(BME_ADDR);
   oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
   LittleFS.begin(true);
-  //InitSequence();
 
   // SENSOR STARTUP
   
@@ -368,16 +433,18 @@ void setup() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // MQTT
   client.setServer(mqtt_server, atoi(mqtt_port));
-  
+  client.connect("ESP32_01_ROOM_LEVEL_1");
   
   // OLED SETUP
-  oled.clearDisplay();
-  oled.setTextColor(SSD1306_WHITE);
-  oled.setTextSize(1);
-  oled.setCursor(0, 28);
-  oled.print("Starting...");
-  oled.display();
-
+  if (alreadyOn == 0){
+    //InitSequence();
+    oled.clearDisplay();
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setTextSize(1);
+    oled.setCursor(0, 28);
+    oled.print("Starting...");
+    oled.display();
+  }
   // RTOS STUFF
   jsonQueue = xQueueCreate(1, JSON_BUFFER_SIZE);
   LittleFSMutex = xSemaphoreCreateMutex();
