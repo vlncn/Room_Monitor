@@ -1,5 +1,47 @@
 /*
-  A
+  ============================================================================
+  Room Monitor - ESP32 temperature & humidity node                     v1.0.1
+  ============================================================================
+  WHAT IT IS
+    A room climate sensor. Every 10 minutes the ESP32 wakes up, reads
+    temperature and humidity from a BME280, shows the values on a small OLED
+    and publishes them as JSON over MQTT, then goes back to deep sleep. On the
+    server side, Telegraf picks the readings up from the broker, InfluxDB
+    stores them and Grafana shows them.
+
+  ONE MEASUREMENT CYCLE
+    1. Wake / boot. Wi-Fi comes up through WiFiManager. On the first boot (no
+       saved broker) a captive portal named "OnDemandAP" asks for the Wi-Fi
+       credentials and the MQTT broker host and port, and stores them in NVS.
+    2. The clock is synced over NTP. Nothing is measured before that, because
+       every reading carries a UTC timestamp.
+    3. SchedulerTask releases the worker tasks (FreeRTOS tasks that run once
+       per wake-up):
+         SensorTask   forced BME280 reading -> JSON -> one-slot queue
+         DisplayTask  draws temperature and humidity on the OLED
+         NetworkTask  publishes the JSON; if that fails, the reading is
+                      appended to a backlog file in LittleFS. When the broker
+                      is reachable it then replays the backlog.
+         SleeTask     Run after every task is done. ESP32 will enter deep sleep
+                      for about 10 minutes reduced by the time it takes to upload
+                      data to MQTT. Also check for new update for every day has
+                      elapsed.
+
+  MQTT
+    ROOM_LEVEL_1/now/data       live reading
+    ROOM_LEVEL_1/backlog/data   reading replayed from flash after an outage
+
+  HARDWARE
+    ESP32 dev board, BME280 (I2C 0x76), SSD1306 128x64 OLED (I2C 0x3C).
+    SDA = GPIO21, SCL = GPIO22: one shared 400 kHz bus guarded by a mutex.
+
+  BUILD
+    Board: ESP32 Dev Module, with a partition scheme that has two app slots
+    (for OTA) and a SPIFFS/LittleFS data partition.
+    Libraries: PubSubClient, Adafruit BME280, Adafruit Unified Sensor,
+    Adafruit GFX, Adafruit SSD1306, WiFiManager (tzapu). Everything else
+    ships with the ESP32 Arduino core.
+    Settings you may want to change are in the CONFIG block below.
 */
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -11,6 +53,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include <LittleFS.h>
+#include "FS.h"
 #include <WiFiManager.h>
 #include <HTTPClient.h>
 #include <Update.h>
@@ -25,10 +68,9 @@ const long  gmtOffset_sec = 8 * 3600;
 const int   daylightOffset_sec = 0;
 const char* LOG_FILE       = "/records.csv";
 const char* TEMP_FILE      = "/records.temp";
-const char* versionUrl= "https://raw.githubusercontent.com/vlncn/Room_Monitor/tree/Product-grade/version.txt";
-const char* firmwareUrl = "";
-const char* currentFirmwareVersion = "1.0.0";
-
+const char* versionUrl= "https://raw.githubusercontent.com/vlncn/Room_Monitor/version.txt";
+const char* firmwareUrl = "https://github.com/vlncn/Room_Monitor/releases/download/Release/firmware.bin";
+const char* currentFirmwareVersion = "1.0.1";
 constexpr uint32_t MEASURE_INTERVAL_MS = 10UL * 60UL * 1000UL;
 // -----------------------------
 
@@ -70,7 +112,7 @@ bool connectedtoMQTT = false;
 bool bypasstobuffer = false;
 uint8_t retryCount;
 uint8_t num_of_task = 4;
-ReadingResult latestread; //Creating latest read Struct to display in OLED
+ReadingResult latestread;
 RTC_DATA_ATTR time_t Startuptime;
 RTC_DATA_ATTR uint16_t sequenceNumber;
 RTC_DATA_ATTR bool alreadyOn;
@@ -152,17 +194,31 @@ void LoadSavedMQTTServer(){
 }
 
 /*                                   OTA                                 */
-bool CheckForUpdate(){
-    if (time(nullptr) - Startuptime >= 86400){
-        String latestVersion = fetchLatestVersion();
-        if (latestVersion == "") {
-            return;
-        }
-      // Step 2: Compare versions
-        if (latestVersion != currentFirmwareVersion) {
-            downloadAndApplyFirmware();
-        }
+bool startOTAUpdate(WiFiClient* client, int contentLength) {
+  if (!Update.begin(contentLength)) return false;
+
+  size_t written = 0;
+
+  const unsigned long timeoutDuration = 120*1000;  
+  unsigned long lastDataTime = millis();
+
+  while (written < contentLength) {
+    if (client->available()) {
+      uint8_t buffer[128];
+      size_t len = client->read(buffer, sizeof(buffer));
+      if (len > 0) {
+        Update.write(buffer, len);
+        written += len;
+        lastDataTime = millis();
+      }
     }
+    if (millis() - lastDataTime > timeoutDuration) {Update.abort(); return false;}
+    yield();
+  }
+
+  if (written != contentLength) {Update.abort(); return false;}
+  if (!Update.end()) return false;
+  return true;
 }
 
 String fetchLatestVersion() {
@@ -196,34 +252,17 @@ void downloadAndApplyFirmware() {
   http.end();
 }
 
-
-bool startOTAUpdate(WiFiClient* client, int contentLength) {
-  if (!Update.begin(contentLength)) return false;
-
-  size_t written = 0;
-
-  // Timeout variables
-  const unsigned long timeoutDuration = 120*1000;  // 10 seconds timeout
-  unsigned long lastDataTime = millis();
-
-  while (written < contentLength) {
-    if (client->available()) {
-      uint8_t buffer[128];
-      size_t len = client->read(buffer, sizeof(buffer));
-      if (len > 0) {
-        Update.write(buffer, len);
-        written += len;
-        lastDataTime = millis();
-      }
+void CheckForUpdate(){
+    if (time(nullptr) - Startuptime >= 86400){
+        Startuptime = time(nullptr);
+        String latestVersion = fetchLatestVersion();
+        if (latestVersion == "") {
+            return;
+        }
+        if (latestVersion != currentFirmwareVersion) {
+            downloadAndApplyFirmware();
+        }
     }
-    // Check for timeout
-    if (millis() - lastDataTime > timeoutDuration) {Update.abort(); return false;}
-    yield();
-  }
-
-  if (written != contentLength) {Update.abort(); return false;}
-  if (!Update.end()) return false;
-  return true;
 }
 
 /*                             Message ID Handler                       */
@@ -280,7 +319,6 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
 
         jsonBuffer[len] = '\0';
 
-        // Skip empty lines
         if (len == 0) continue;
 
         if (!client.publish("ROOM_LEVEL_1/backlog/data", jsonBuffer)){out.println(jsonBuffer); failed = true ;}
@@ -296,7 +334,7 @@ void ReadFromLittleFS(){ // Open Log File to be uploaded to MQTT Broker while al
 
 /*                            Parsing Data                       */
 void datatoJSon(struct ReadingResult data){ // Convert data into JSON FILE and queue the data before sending it to mqtt broker
-    uint16_t seq = sequenceNumber++; // GetSequence()
+    uint16_t seq = GetSequence();
     char localBuffer[JSON_BUFFER_SIZE];
 
     snprintf(localBuffer, sizeof(localBuffer),
@@ -337,10 +375,11 @@ void NetworkTask(void *Parameters){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     RetryConnection();
     // This thing need refactor
-    if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE);
+    if (xQueueReceive(jsonQueue, &txBuffer, pdMS_TO_TICKS(30000)) == pdTRUE){
         if (!client.publish("ROOM_LEVEL_1/now/data", txBuffer) || !connectedtoMQTT) {
             SavetoLittleFS(txBuffer);
         }
+    }
     if (LittleFS.exists(LOG_FILE) && connectedtoMQTT) { 
         ReadFromLittleFS();
     }
@@ -435,9 +474,9 @@ void setup() {
   client.setServer(mqtt_server, atoi(mqtt_port));
   client.connect("ESP32_01_ROOM_LEVEL_1");
   
-  // OLED SETUP
+  // Only on first run Code
   if (alreadyOn == 0){
-    //InitSequence();
+    InitSequence();
     oled.clearDisplay();
     oled.setTextColor(SSD1306_WHITE);
     oled.setTextSize(1);

@@ -1,20 +1,18 @@
 # Room Monitor
-
+### Status: Done
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Status](https://img.shields.io/badge/status-Prototype-brightgreen) ![Platform](https://img.shields.io/badge/platform-ESP32-blue)
 
 An ESP32 + BME280 node that logs room temperature and humidity, compares them with the outdoor conditions in my city, and charts both in Grafana.
 
 **Hypothesis:** My room is cooler than outside on hot days and warmer on cool days.
 
-## Result 
-True to some extent.
+**Result:** True to some extent. Need more data, possibly in another project.
 
-## Status: Done
 
 ## Documentation
 ![Grafana dashboard](docs/Grafana_Dashboard.png)
 
-## Feature
+## Features
  
 - [x] FreeRTOS
 - [x] Wi-Fi + MQTT, NTP-stamped JSON payloads
@@ -29,7 +27,7 @@ True to some extent.
 - [x] **Wi-Fi Manager:**
 - [x] Deep sleep
 
-## Run it
+## Run
 
 **Clone** 
 ```sh
